@@ -9,6 +9,7 @@ from hardware.throttle import Throttle
 from control.steering import SteeringMapper
 from control.controller import SteeringController
 from control.throttle_controller import ThrottleController
+from control.arm_controller import ArmController
 
 from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
@@ -56,9 +57,11 @@ def main():
         else None
     )
 
+    arm = ArmController()
+
     # ---------- Inputs ----------
-    keyboard_steer = KeyboardSteeringInput(step=0.05)
-    keyboard_throttle = KeyboardThrottleInput(step=0.05)
+    keyboard_steer = KeyboardSteeringInput(step=0.1)
+    keyboard_throttle = KeyboardThrottleInput(step=0.1)
 
     gamepad = None
     if config.GAMEPAD_ENABLED:
@@ -67,7 +70,6 @@ def main():
         except Exception as e:
             print("[WARN] Gamepad not available:", e)
 
-    armed = False
     print("[SYSTEM] Main loop started")
 
     try:
@@ -77,16 +79,26 @@ def main():
 
             # ----- Gamepad -----
             if gamepad:
-                ls, rs, gp_throttle, gp_arm = next(gamepad.values())
+                ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
+
+                # рулить можно любым стиком
                 steer = rs if abs(rs) > abs(ls) else ls
                 throttle_value = gp_throttle
-                armed = armed or gp_arm
 
-            # ----- Keyboard fallback -----
+                if gp_arm_event == "arm":
+                    arm.arm()
+                elif gp_arm_event == "disarm":
+                    arm.disarm()
+
+            # ----- Keyboard -----
             if config.KEYBOARD_ENABLED:
                 steer += keyboard_steer.read()
                 throttle_value += keyboard_throttle.read()
-                armed = armed or keyboard_throttle.armed
+
+                if keyboard_throttle.arm_event == "arm":
+                    arm.arm()
+                elif keyboard_throttle.arm_event == "disarm":
+                    arm.disarm()
 
             steer = max(-1.0, min(1.0, steer))
             throttle_value = max(-1.0, min(1.0, throttle_value))
@@ -95,7 +107,7 @@ def main():
                 steering.update(steer)
 
             if motor:
-                if armed:
+                if arm.armed:
                     motor.update(throttle_value)
                 else:
                     motor.stop()
@@ -107,9 +119,9 @@ def main():
 
     finally:
         print("[SYSTEM] Shutting down safely")
-        if steering:
+        if servo:
             servo.set_center()
-        if motor:
+        if throttle:
             throttle.set_neutral()
 
 

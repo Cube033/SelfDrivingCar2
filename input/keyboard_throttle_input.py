@@ -1,36 +1,40 @@
 # input/keyboard_throttle_input.py
-import time
-import keyboard
+
+import sys
+import termios
+import tty
+import select
+
 
 class KeyboardThrottleInput:
-    def __init__(self, step=0.05, rate_hz=20):
+    def __init__(self, step=0.05):
         self.step = step
-        self.dt = 1.0 / rate_hz
         self.value = 0.0
+        self.arm_event = None  # "arm" | "disarm" | None
 
-    def values(self):
-        print("Управление газом:")
-        print("  w/s    : вперед/назад")
-        print("  space  : нейтраль")
-        print("  q      : выход")
+        self.fd = sys.stdin.fileno()
+        self.old_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
 
-        while True:
-            if keyboard.is_pressed("q"):
-                return
+    def _read_key(self):
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1)
+        return None
 
-            if keyboard.is_pressed("space"):
-                self.value = 0.0
-            else:
-                if keyboard.is_pressed("w"):
-                    self.value = min(1.0, self.value + self.step)
-                elif keyboard.is_pressed("s"):
-                    self.value = max(-1.0, self.value - self.step)
-                else:
-                    # авто-возврат к нейтрали понемногу
-                    if self.value > 0:
-                        self.value = max(0.0, self.value - self.step)
-                    elif self.value < 0:
-                        self.value = min(0.0, self.value + self.step)
+    def read(self) -> float:
+        self.arm_event = None
+        key = self._read_key()
 
-            yield self.value
-            time.sleep(self.dt)
+        if key == "w":
+            self.value += self.step
+        elif key == "s":
+            self.value -= self.step
+        elif key == " ":
+            self.value = 0.0
+        elif key == "\r":  # Enter
+            self.arm_event = "arm"
+        elif key == "\x1b":  # Esc
+            self.arm_event = "disarm"
+
+        self.value = max(-1.0, min(1.0, self.value))
+        return self.value

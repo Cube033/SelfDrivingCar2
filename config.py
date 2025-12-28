@@ -27,3 +27,5 @@ GAMEPAD_DEVICE = "/dev/input/event5"  # DualShock 4
 # Клавиши безопасности
 KEYBOARD_ARM_KEY = "enter"
 KEYBOARD_DISARM_KEY = "esc"
+
+STEERING_GAIN = 1.8   # 1.5–2.5 обычно идеально

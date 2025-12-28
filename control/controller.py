@@ -8,4 +8,6 @@ class SteeringController:
     def update(self, steering_value: float):
        steering_value = max(-1.0, min(1.0, steering_value))
        mapped = self.mapper.apply(steering_value)
-       self.servo.set_normalized(mapped)
+        mapped *= config.STEERING_GAIN
+        mapped = max(-1.0, min(1.0, mapped))
+        self.servo.set_normalized(mapped)   

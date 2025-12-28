@@ -8,7 +8,7 @@ from hardware.throttle import Throttle
 
 from control.steering import SteeringMapper
 from control.controller import SteeringController
-from hardware.throttle_controller import ThrottleController
+from control.throttle_controller import ThrottleController
 
 from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
@@ -16,12 +16,7 @@ from input.dualshock_input import DualShockInput
 
 
 def main():
-    servo = None
-    throttle = None
-    steering = None
-    motor = None
-
-    # ===== Hardware init (safe) =====
+    # ---------- Hardware ----------
     try:
         servo = Servo(
             channel=0,
@@ -29,17 +24,9 @@ def main():
             left_us=config.SERVO_LEFT_US,
             right_us=config.SERVO_RIGHT_US,
         )
-
-        steering_mapper = SteeringMapper(
-            dead_zone=config.STEERING_DEAD_ZONE,
-            invert=config.STEERING_INVERT,
-        )
-
-        steering = SteeringController(steering_mapper, servo)
-        print("[INIT] Servo OK")
-
     except Exception as e:
         print("[WARN] Servo not available:", e)
+        servo = None
 
     try:
         throttle = Throttle(
@@ -47,19 +34,29 @@ def main():
             neutral_us=config.THROTTLE_NEUTRAL_US,
             forward_us=config.THROTTLE_FORWARD_US,
             reverse_us=config.THROTTLE_REVERSE_US,
-            invert=config.THROTTLE_INVERT,
         )
-
-        motor = ThrottleController(
-            throttle,
-            dead_zone=config.THROTTLE_DEAD_ZONE,
-        )
-        print("[INIT] Throttle OK")
-
     except Exception as e:
         print("[WARN] Throttle not available:", e)
+        throttle = None
 
-    # ===== Inputs =====
+    # ---------- Controllers ----------
+    steering_mapper = SteeringMapper(
+        dead_zone=config.STEERING_DEAD_ZONE,
+        invert=config.STEERING_INVERT,
+    )
+
+    steering = SteeringController(steering_mapper, servo) if servo else None
+    motor = (
+        ThrottleController(
+            throttle,
+            dead_zone=config.THROTTLE_DEAD_ZONE,
+            invert=config.THROTTLE_INVERT,
+        )
+        if throttle
+        else None
+    )
+
+    # ---------- Inputs ----------
     keyboard_steer = KeyboardSteeringInput(step=0.05)
     keyboard_throttle = KeyboardThrottleInput(step=0.05)
 
@@ -71,7 +68,6 @@ def main():
             print("[WARN] Gamepad not available:", e)
 
     armed = False
-
     print("[SYSTEM] Main loop started")
 
     try:
@@ -79,18 +75,14 @@ def main():
             steer = 0.0
             throttle_value = 0.0
 
-            # --- Gamepad ---
+            # ----- Gamepad -----
             if gamepad:
-                try:
-                    ls, rs, gp_throttle, gp_armed = next(gamepad.values())
-                    steer = rs if abs(rs) > abs(ls) else ls
-                    throttle_value = gp_throttle
-                    armed = armed or gp_armed
-                except Exception as e:
-                    print("[WARN] Gamepad lost:", e)
-                    gamepad = None
+                ls, rs, gp_throttle, gp_arm = next(gamepad.values())
+                steer = rs if abs(rs) > abs(ls) else ls
+                throttle_value = gp_throttle
+                armed = armed or gp_arm
 
-            # --- Keyboard fallback ---
+            # ----- Keyboard fallback -----
             if config.KEYBOARD_ENABLED:
                 steer += keyboard_steer.read()
                 throttle_value += keyboard_throttle.read()
@@ -108,10 +100,10 @@ def main():
                 else:
                     motor.stop()
 
-            time.sleep(0.02)
+            time.sleep(0.02)  # 50 Hz
 
     except KeyboardInterrupt:
-        print("[SYSTEM] Exit requested")
+        print("[SYSTEM] Keyboard interrupt")
 
     finally:
         print("[SYSTEM] Shutting down safely")

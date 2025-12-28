@@ -2,6 +2,7 @@
 
 import time
 import sys
+import os
 import config
 
 from hardware.servo import Servo
@@ -16,6 +17,18 @@ from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
 from input.dualshock_input import DualShockInput
 
+
+# =========================================================
+# Helpers
+# =========================================================
+
+def gamepad_available(device_path: str) -> bool:
+    return bool(device_path) and os.path.exists(device_path)
+
+
+# =========================================================
+# Main
+# =========================================================
 
 def main():
     has_tty = sys.stdin.isatty()
@@ -84,11 +97,11 @@ def main():
         print("[SYSTEM] Keyboard input disabled (no TTY)")
 
     gamepad = None
-    if config.GAMEPAD_ENABLED:
-        try:
-            gamepad = DualShockInput(config.GAMEPAD_DEVICE)
-        except Exception as e:
-            print("[WARN] Gamepad not available:", e)
+    last_gamepad_check = 0.0
+    GAMEPAD_RETRY_INTERVAL = 2.0  # seconds
+
+    if not config.GAMEPAD_ENABLED:
+        print("[SYSTEM] Gamepad disabled in config")
 
     print("[SYSTEM] Main loop started")
 
@@ -98,19 +111,44 @@ def main():
 
     try:
         while True:
+            now = time.time()
+
             steer = 0.0
             throttle_value = 0.0
 
-            # ---------- Gamepad ----------
+            # -----------------------------------------------------
+            # Gamepad hot-plug / reconnect
+            # -----------------------------------------------------
+
+            if config.GAMEPAD_ENABLED:
+                # Try to connect if missing
+                if gamepad is None and now - last_gamepad_check > GAMEPAD_RETRY_INTERVAL:
+                    last_gamepad_check = now
+
+                    if gamepad_available(config.GAMEPAD_DEVICE):
+                        try:
+                            gamepad = DualShockInput(config.GAMEPAD_DEVICE)
+                            print("[SYSTEM] Gamepad connected")
+                        except Exception as e:
+                            print("[WARN] Failed to init gamepad:", e)
+
+                # Detect disconnect
+                elif gamepad is not None and not gamepad_available(config.GAMEPAD_DEVICE):
+                    print("[WARN] Gamepad disconnected")
+                    gamepad = None
+
+            # -----------------------------------------------------
+            # Gamepad input
+            # -----------------------------------------------------
+
             if gamepad:
                 try:
                     ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
                 except StopIteration:
-                    print("[WARN] Gamepad input stopped")
+                    print("[WARN] Gamepad input stopped (device lost)")
                     gamepad = None
                     continue
 
-                # рулить можно любым стиком
                 steer = rs if abs(rs) > abs(ls) else ls
                 throttle_value = gp_throttle
 
@@ -119,7 +157,10 @@ def main():
                 elif gp_arm_event == "disarm":
                     arm.disarm()
 
-            # ---------- Keyboard ----------
+            # -----------------------------------------------------
+            # Keyboard input
+            # -----------------------------------------------------
+
             if keyboard_steer and keyboard_throttle:
                 steer += keyboard_steer.read()
                 throttle_value += keyboard_throttle.read()
@@ -129,11 +170,17 @@ def main():
                 elif keyboard_throttle.arm_event == "disarm":
                     arm.disarm()
 
-            # ---------- Clamp ----------
+            # -----------------------------------------------------
+            # Clamp
+            # -----------------------------------------------------
+
             steer = max(-1.0, min(1.0, steer))
             throttle_value = max(-1.0, min(1.0, throttle_value))
 
-            # ---------- Apply ----------
+            # -----------------------------------------------------
+            # Apply
+            # -----------------------------------------------------
+
             if steering:
                 steering.update(steer)
 
@@ -143,12 +190,12 @@ def main():
                 else:
                     motor.stop()
 
-            time.sleep(0.02)  # 50 Hz
+            # -----------------------------------------------------
+            # Debug
+            # -----------------------------------------------------
 
-            # ---------- Debug ----------
-            now = time.time()
             if not hasattr(main, "_last_log"):
-                main._last_log = 0
+                main._last_log = 0.0
 
             if now - main._last_log > 0.5:
                 print(
@@ -157,6 +204,8 @@ def main():
                     f"armed={arm.armed}"
                 )
                 main._last_log = now
+
+            time.sleep(0.02)  # 50 Hz
 
     except KeyboardInterrupt:
         print("[SYSTEM] Keyboard interrupt")

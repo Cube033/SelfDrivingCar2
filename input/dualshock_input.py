@@ -16,10 +16,10 @@ class DualShockInput:
     def __init__(self, device_path: str):
         self.dev = InputDevice(device_path)
 
-        try:
+        #try:
             #self.dev.grab()  # эксклюзивный доступ
-        except OSError:
-            print("[WARN] Cannot grab gamepad (already in use)")
+        #except OSError:
+        #    print("[WARN] Cannot grab gamepad (already in use)")
 
         # --- state ---
         self.left_x = 0.0

@@ -14,12 +14,10 @@ class DualShockInput:
     """
 
     def __init__(self, device_path: str):
-        self.dev = InputDevice(device_path)
+        print(f"[DS] Opening input device: {device_path}")
 
-        #try:
-            #self.dev.grab()  # эксклюзивный доступ
-        #except OSError:
-        #    print("[WARN] Cannot grab gamepad (already in use)")
+        # ❗ Никакого grab — он ломает Bluetooth + systemd
+        self.dev = InputDevice(device_path)
 
         # --- state ---
         self.left_x = 0.0
@@ -50,12 +48,13 @@ class DualShockInput:
     def values(self):
         """
         Generator of gamepad state.
-        Terminates cleanly if device disappears.
+        Cleanly stops if device disappears.
         """
         while True:
             arm_event = None
 
             try:
+                # Ждём события от устройства (20 мс)
                 r, _, _ = select([self.dev], [], [], 0.02)
 
                 if r:
@@ -75,27 +74,28 @@ class DualShockInput:
                             elif event.code == ecodes.ABS_Z:    # L2 → reverse
                                 self.reverse = self._norm_trigger(event.value)
 
-                        # ----- buttons (press only) -----
-                        elif event.type == ecodes.EV_KEY and event.value == 1:
-
-                            # ❌ X button → ARM
-                            if event.code == ecodes.BTN_SOUTH:
-                                arm_event = "arm"
-                                print("[ARM] ON (gamepad)")
-
-                            # PS button → DISARM
-                            elif event.code == ecodes.BTN_MODE:
-                                arm_event = "disarm"
-                                print("[ARM] OFF (gamepad)")
-
-                        if event.type == ecodes.EV_KEY:
+                        # ----- buttons -----
+                        elif event.type == ecodes.EV_KEY:
                             print(f"[KEY] code={event.code} value={event.value}")
 
-            except OSError:
-                # Устройство исчезло (Bluetooth / USB / питание)
-                print("[WARN] Gamepad disconnected")
-                return  # ← корректно завершаем генератор
+                            # реагируем только на нажатие
+                            if event.value == 1:
+                                # ❌ X → ARM
+                                if event.code == ecodes.BTN_SOUTH:
+                                    arm_event = "arm"
+                                    print("[ARM] ON (gamepad)")
 
+                                # PS → DISARM
+                                elif event.code == ecodes.BTN_MODE:
+                                    arm_event = "disarm"
+                                    print("[ARM] OFF (gamepad)")
+
+            except OSError as e:
+                # Bluetooth-устройство пропало
+                print(f"[WARN] Gamepad disconnected: {e}")
+                return  # корректно завершаем генератор
+
+            # ----- compute throttle -----
             throttle = self.forward - self.reverse
             throttle = max(-1.0, min(1.0, throttle))
 

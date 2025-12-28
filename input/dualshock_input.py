@@ -1,12 +1,10 @@
-# input/dualshock_input.py
-
 from evdev import InputDevice, ecodes
 from select import select
 
 
 class DualShockInput:
     """
-    DualShock 4 input reader.
+    DualShock 4 input reader (Linux evdev).
 
     Emits (через generator values()):
         left_steer  : -1.0 .. +1.0
@@ -31,12 +29,16 @@ class DualShockInput:
 
     @staticmethod
     def _norm_axis(value: int, center=128, span=128) -> float:
-        """ABS axis → -1.0 .. +1.0"""
+        """
+        ABS axis (0..255) → -1.0 .. +1.0
+        """
         return max(-1.0, min(1.0, (value - center) / span))
 
     @staticmethod
     def _norm_trigger(value: int) -> float:
-        """Trigger → 0.0 .. 1.0"""
+        """
+        Trigger (0..255) → 0.0 .. 1.0
+        """
         return max(0.0, min(1.0, value / 255.0))
 
     # ---------- main generator ----------
@@ -64,13 +66,13 @@ class DualShockInput:
                         elif event.code == ecodes.ABS_Z:    # L2 → reverse
                             self.reverse = self._norm_trigger(event.value)
 
-                    # ----- buttons -----
+                    # ----- buttons (press only) -----
                     elif event.type == ecodes.EV_KEY and event.value == 1:
-                        if event.code == ecodes.BTN_OPTIONS:
+                        if event.code == ecodes.BTN_START:      # Options
                             arm_event = "arm"
                             print("[ARM] ON (gamepad)")
 
-                        elif event.code == ecodes.BTN_MODE:  # PS button
+                        elif event.code == ecodes.BTN_MODE:     # PS button
                             arm_event = "disarm"
                             print("[ARM] OFF (gamepad)")
 

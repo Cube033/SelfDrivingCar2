@@ -1,5 +1,7 @@
 # config.py
 
+import sys
+
 # ===== Steering =====
 STEERING_INVERT = True
 STEERING_DEAD_ZONE = 0.03
@@ -19,7 +21,7 @@ THROTTLE_REVERSE_US = 1100
 
 
 # ===== Input =====
-KEYBOARD_ENABLED = True
+KEYBOARD_ENABLED = sys.stdin.isatty()
 GAMEPAD_ENABLED = True
 
 GAMEPAD_DEVICE = "/dev/input/event5"  # DualShock 4

@@ -1,6 +1,7 @@
 # app/main.py
 
 import time
+import sys
 import config
 
 from hardware.servo import Servo
@@ -17,7 +18,12 @@ from input.dualshock_input import DualShockInput
 
 
 def main():
-    # ---------- Hardware ----------
+    has_tty = sys.stdin.isatty()
+
+    # =========================================================
+    # Hardware
+    # =========================================================
+
     try:
         servo = Servo(
             channel=0,
@@ -40,13 +46,17 @@ def main():
         print("[WARN] Throttle not available:", e)
         throttle = None
 
-    # ---------- Controllers ----------
+    # =========================================================
+    # Controllers
+    # =========================================================
+
     steering_mapper = SteeringMapper(
         dead_zone=config.STEERING_DEAD_ZONE,
         invert=config.STEERING_INVERT,
     )
 
     steering = SteeringController(steering_mapper, servo) if servo else None
+
     motor = (
         ThrottleController(
             throttle,
@@ -59,9 +69,19 @@ def main():
 
     arm = ArmController()
 
-    # ---------- Inputs ----------
-    keyboard_steer = KeyboardSteeringInput(step=0.1)
-    keyboard_throttle = KeyboardThrottleInput(step=0.1)
+    # =========================================================
+    # Inputs
+    # =========================================================
+
+    keyboard_steer = None
+    keyboard_throttle = None
+
+    if config.KEYBOARD_ENABLED and has_tty:
+        keyboard_steer = KeyboardSteeringInput(step=0.1)
+        keyboard_throttle = KeyboardThrottleInput(step=0.1)
+        print("[SYSTEM] Keyboard input enabled")
+    else:
+        print("[SYSTEM] Keyboard input disabled (no TTY)")
 
     gamepad = None
     if config.GAMEPAD_ENABLED:
@@ -72,12 +92,16 @@ def main():
 
     print("[SYSTEM] Main loop started")
 
+    # =========================================================
+    # Main loop
+    # =========================================================
+
     try:
         while True:
             steer = 0.0
             throttle_value = 0.0
 
-            # ----- Gamepad -----
+            # ---------- Gamepad ----------
             if gamepad:
                 ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
 
@@ -90,8 +114,8 @@ def main():
                 elif gp_arm_event == "disarm":
                     arm.disarm()
 
-            # ----- Keyboard -----
-            if config.KEYBOARD_ENABLED:
+            # ---------- Keyboard ----------
+            if keyboard_steer and keyboard_throttle:
                 steer += keyboard_steer.read()
                 throttle_value += keyboard_throttle.read()
 
@@ -100,9 +124,11 @@ def main():
                 elif keyboard_throttle.arm_event == "disarm":
                     arm.disarm()
 
+            # ---------- Clamp ----------
             steer = max(-1.0, min(1.0, steer))
             throttle_value = max(-1.0, min(1.0, throttle_value))
 
+            # ---------- Apply ----------
             if steering:
                 steering.update(steer)
 
@@ -119,8 +145,10 @@ def main():
 
     finally:
         print("[SYSTEM] Shutting down safely")
+
         if servo:
             servo.set_center()
+
         if throttle:
             throttle.set_neutral()
 

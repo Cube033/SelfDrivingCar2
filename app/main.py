@@ -140,6 +140,19 @@ def main():
 
             time.sleep(0.02)  # 50 Hz
 
+            # ---------- Debug ----------
+            now = time.time()
+            if not hasattr(main, "_last_log"):
+                main._last_log = 0
+
+            if now - main._last_log > 0.5:
+                print(
+                    f"[DEBUG] steer={steer:+.2f} "
+                    f"throttle={throttle_value:+.2f} "
+                    f"armed={arm.armed}"
+                )
+                main._last_log = now
+
     except KeyboardInterrupt:
         print("[SYSTEM] Keyboard interrupt")
 

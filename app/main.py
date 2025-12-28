@@ -103,7 +103,12 @@ def main():
 
             # ---------- Gamepad ----------
             if gamepad:
-                ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
+                try:
+                    ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
+                except StopIteration:
+                    print("[WARN] Gamepad input stopped")
+                    gamepad = None
+                    continue
 
                 # рулить можно любым стиком
                 steer = rs if abs(rs) > abs(ls) else ls

@@ -88,6 +88,9 @@ class DualShockInput:
                                 arm_event = "disarm"
                                 print("[ARM] OFF (gamepad)")
 
+                        if event.type == ecodes.EV_KEY:
+                            print(f"[KEY] code={event.code} value={event.value}")
+
             except OSError:
                 # Устройство исчезло (Bluetooth / USB / питание)
                 print("[WARN] Gamepad disconnected")

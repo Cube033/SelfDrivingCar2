@@ -112,6 +112,9 @@ def main():
         if np_outputs is None:
             return
         mask = np_outputs[0]
+        if _last_stats["frame"] % (args.print_every * 10) == 0:
+            uniq = np.unique(mask)
+            print(f"[debug] mask shape={mask.shape} uniq_count={len(uniq)} uniq_head={uniq[:10]}")
         if mask is None:
             return
 

@@ -7,3 +7,9 @@ __pycache__/
 
 # OS junk
 .DS_Store
+
+# Python bytecode / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

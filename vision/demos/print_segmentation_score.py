@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""
-IMX500 segmentation console demo (production-ish).
-
-- Inference runs on IMX500 (camera). Raspberry reads outputs from metadata.
-- Computes ROI (bottom-center) on the segmentation output and prints:
-  - FPS
-  - dominant class id + ratio
-  - top-k classes
-  - FREE ratio for a chosen floor class and STOP decision
-
-Works over SSH (no DISPLAY), show_preview=False.
-
-Notes:
-- Some models return class-id map as float32 (e.g. 0.0, 9.0...) -> we cast safely.
-- Some models may return logits/probabilities -> we argmax to class map.
-"""
-
-from __future__ import annotations
-
 import argparse
 import time
 from dataclasses import dataclass
@@ -55,204 +36,215 @@ def compute_roi(width: int, height: int, roi_w: float, roi_h_bottom: float) -> R
     return Roi(x0=x0, y0=y0, x1=x1, y1=y1)
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--model", default="/usr/share/imx500-models/imx500_network_deeplabv3plus.rpk")
-    p.add_argument("--width", type=int, default=640)
-    p.add_argument("--height", type=int, default=480)
-    p.add_argument("--roi-w", type=float, default=0.35)
-    p.add_argument("--roi-h-bottom", type=float, default=0.35)
-    p.add_argument("--print-every", type=int, default=10)
-    p.add_argument("--floor-class", type=int, default=None)
-    p.add_argument("--stop-threshold", type=float, default=0.35)
-    p.add_argument("--ignore-zero", action="store_true", help="Ignore class 0 in top-k stats (recommended).")
-    p.add_argument("--max-fps", type=float, default=0.0, help="If >0, limit processing/printing loop rate.")
-    p.add_argument("--debug", action="store_true", help="Print extra debug (unique classes head) sometimes.")
-    return p.parse_args()
-
-
-def as_class_map(mask: np.ndarray) -> np.ndarray:
+def topk_classes_int(roi_map: np.ndarray, k: int = 3, ignore_zero: bool = True) -> List[Tuple[int, float]]:
     """
-    Normalize IMX500 output to int32 class-id map of shape (H, W).
-
-    Supported:
-    - (H, W) class ids (int/float)
-    - (H, W, C) logits/probabilities -> argmax over C
-    - (C, H, W) logits -> argmax over C
-    - (1, ...) batch -> squeeze
+    roi_map must contain integer class ids.
+    Returns [(class_id, ratio), ...] sorted by ratio desc.
     """
-    if mask is None:
-        raise RuntimeError("Mask is None")
-
-    t = mask
-    if t.ndim >= 3 and t.shape[0] == 1:
-        t = np.squeeze(t, axis=0)
-
-    if t.ndim == 2:
-        # sometimes float32 values like 0.0, 9.0, ...
-        return np.rint(t).astype(np.int32, copy=False)
-
-    if t.ndim == 3:
-        # Heuristic: if last dim looks like classes -> HWC
-        if t.shape[-1] <= 512:
-            return np.argmax(t, axis=-1).astype(np.int32, copy=False)
-        # else assume CHW
-        return np.argmax(t, axis=0).astype(np.int32, copy=False)
-
-    raise RuntimeError(f"Unexpected mask shape: {t.shape}")
-
-
-def topk_classes(roi_map_int: np.ndarray, k: int = 3, ignore_zero: bool = True) -> List[Tuple[int, float]]:
-    flat = roi_map_int.reshape(-1)
+    flat = roi_map.reshape(-1)
     if flat.size == 0:
         return []
-
-    # bincount needs non-negative ints
-    flat = flat.astype(np.int64, copy=False)
-    flat = flat[flat >= 0]
-    if flat.size == 0:
-        return []
-
+    # ensure int for bincount
+    flat = flat.astype(np.int32, copy=False)
     counts = np.bincount(flat)
     if ignore_zero and counts.size > 0:
         counts[0] = 0
-
-    total = float(roi_map_int.size)
-    if total <= 0:
+    total = float(flat.size)
+    if counts.size == 0:
         return []
-
     top = np.argsort(counts)[::-1][:k]
-    return [(int(c), float(counts[c]) / total) for c in top if c < counts.size and counts[c] > 0]
+    return [(int(c), float(counts[c]) / total) for c in top if counts[c] > 0]
 
 
-def safe_stop(picam2: Picamera2) -> None:
-    try:
-        picam2.stop()
-    except Exception:
-        # avoid hanging on stop if callback thread crashed
-        try:
-            picam2.close()
-        except Exception:
-            pass
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="/usr/share/imx500-models/imx500_network_deeplabv3plus.rpk")
+    p.add_argument("--print-every", type=int, default=10)
+    p.add_argument("--roi-w", type=float, default=0.35)
+    p.add_argument("--roi-h-bottom", type=float, default=0.35)
+
+    # New naming: background class (default 0)
+    p.add_argument("--bg-class", type=int, default=0, help="Class id considered as FREE/background. Default: 0")
+
+    # Backward-compatible alias (your old flag name)
+    p.add_argument("--floor-class", type=int, default=None,
+                   help="Alias for --bg-class (kept for compatibility).")
+
+    # Thresholds
+    p.add_argument("--stop-threshold", type=float, default=0.90,
+                   help="Enter STOP if FREE(ema) < stop_threshold.")
+    p.add_argument("--go-threshold", type=float, default=0.94,
+                   help="Exit STOP if FREE(ema) >= go_threshold (hysteresis).")
+
+    # Filtering
+    p.add_argument("--ema-alpha", type=float, default=0.2,
+                   help="EMA alpha for FREE smoothing. 0 disables EMA (raw only).")
+    p.add_argument("--min-stop-frames", type=int, default=2,
+                   help="Need this many consecutive 'stop' decisions before switching into STOP.")
+    p.add_argument("--min-go-frames", type=int, default=4,
+                   help="Need this many consecutive 'go' decisions before switching out of STOP.")
+
+    p.add_argument("--ignore-zero", action="store_true",
+                   help="Ignore class 0 in top-k stats (recommended).")
+
+    p.add_argument("--debug", action="store_true")
+    p.add_argument("--max-fps", type=float, default=0.0)
+    return p.parse_args()
 
 
-def main() -> int:
+def main():
     args = parse_args()
 
-    # IMX500 must be created BEFORE Picamera2
+    # Backward compat: if --floor-class passed, it overrides bg-class
+    if args.floor_class is not None:
+        args.bg_class = args.floor_class
+
+    if args.go_threshold < args.stop_threshold:
+        raise ValueError("--go-threshold must be >= --stop-threshold (hysteresis)")
+
     imx500 = IMX500(args.model)
 
-    intr = imx500.network_intrinsics
-    if not intr:
-        intr = NetworkIntrinsics()
-        intr.task = "segmentation"
-    elif intr.task != "segmentation":
-        raise RuntimeError(f"Network task is '{intr.task}', expected 'segmentation'.")
+    intrinsics = imx500.network_intrinsics
+    if not intrinsics:
+        intrinsics = NetworkIntrinsics()
+        intrinsics.task = "segmentation"
+    elif intrinsics.task != "segmentation":
+        raise RuntimeError("Network is not a segmentation task")
 
-    intr.update_with_defaults()
+    intrinsics.update_with_defaults()
 
     picam2 = Picamera2(imx500.camera_num)
-
     config = picam2.create_preview_configuration(
-        main={"size": (args.width, args.height)},
-        controls={"FrameRate": intr.inference_rate},
+        controls={"FrameRate": intrinsics.inference_rate},
         buffer_count=12,
     )
 
     imx500.show_network_fw_progress_bar()
 
-    # Shared stats from callback -> printed in main loop
-    stats = {
-        "frame": 0,
-        "t0": time.time(),
-        "top3": [],
-        "dominant": -1,
-        "dominant_ratio": 0.0,
-        "free_ratio": None,
-        "roi": None,
-        "last_err": None,
-    }
-
     roi: Optional[Roi] = None
 
+    # Shared state
+    frame_count = 0
+    t0 = time.time()
+
+    # Metrics
+    free_raw = 0.0
+    free_ema = None  # type: Optional[float]
+    top3 = []
+    dominant = -1
+    dominant_ratio = 0.0
+
+    # State machine
+    stop_state = False
+    stop_streak = 0
+    go_streak = 0
+
     def on_frame(request: CompletedRequest):
-        nonlocal roi
-        try:
-            stats["frame"] += 1
+        nonlocal roi, frame_count, free_raw, free_ema, top3, dominant, dominant_ratio
+        nonlocal stop_state, stop_streak, go_streak
 
-            outputs = imx500.get_outputs(metadata=request.get_metadata())
-            if not outputs:
-                return
+        frame_count += 1
 
-            mask_raw = outputs[0]
-            cls_map = as_class_map(mask_raw)
+        np_outputs = imx500.get_outputs(metadata=request.get_metadata())
+        if np_outputs is None:
+            return
 
-            if roi is None:
-                # ROI in IMX500 output coordinates (typically 320x320 for deeplab)
-                h, w = cls_map.shape[:2]
-                roi = compute_roi(w, h, args.roi_w, args.roi_h_bottom)
-                stats["roi"] = roi
+        cls_map = np_outputs[0]
+        if cls_map is None:
+            return
 
-            roi_map = cls_map[roi.y0:roi.y1, roi.x0:roi.x1]
+        # Important: ensure integer class ids (some outputs may appear as float32)
+        # In practice IMX500 segmentation is class-id map; casting is safe.
+        if cls_map.dtype != np.uint8 and cls_map.dtype != np.int32 and cls_map.dtype != np.int64:
+            cls_map = cls_map.astype(np.uint8, copy=False)
 
-            top3 = topk_classes(roi_map, k=3, ignore_zero=args.ignore_zero)
-            dom_id = top3[0][0] if top3 else -1
-            dom_ratio = top3[0][1] if top3 else 0.0
+        if roi is None:
+            input_w, input_h = imx500.get_input_size()
+            roi = compute_roi(input_w, input_h, args.roi_w, args.roi_h_bottom)
 
-            stats["top3"] = top3
-            stats["dominant"] = dom_id
-            stats["dominant_ratio"] = dom_ratio
+        roi_map = cls_map[roi.y0:roi.y1, roi.x0:roi.x1]
+        if roi_map.size == 0:
+            return
 
-            if args.floor_class is not None:
-                stats["free_ratio"] = float(np.mean(roi_map == args.floor_class))
+        # Stats
+        top3 = topk_classes_int(roi_map, k=3, ignore_zero=args.ignore_zero)
+        dominant = top3[0][0] if top3 else -1
+        dominant_ratio = top3[0][1] if top3 else 0.0
+
+        # FREE = ratio of bg_class
+        free_raw = float(np.mean(roi_map == args.bg_class))
+
+        # EMA smoothing
+        if args.ema_alpha and args.ema_alpha > 0:
+            if free_ema is None:
+                free_ema = free_raw
             else:
-                stats["free_ratio"] = None
+                a = float(args.ema_alpha)
+                free_ema = a * free_raw + (1.0 - a) * free_ema
+        else:
+            free_ema = free_raw
 
-            if args.debug and stats["frame"] % (args.print_every * 20) == 0:
-                uniq = np.unique(cls_map)
-                print(f"[debug] cls_map shape={cls_map.shape} uniq_count={len(uniq)} uniq_head={uniq[:12]}", flush=True)
+        # Hysteresis + debounce
+        # Decision inputs are based on EMA value
+        f = float(free_ema) if free_ema is not None else free_raw
 
-        except Exception as e:
-            stats["last_err"] = repr(e)
-            # Let main loop print the error once; keep callback running if possible.
+        want_stop = f < args.stop_threshold
+        want_go = f >= args.go_threshold
+
+        if stop_state:
+            # currently stopped: wait for GO confirmation
+            if want_go:
+                go_streak += 1
+                stop_streak = 0
+                if go_streak >= args.min_go_frames:
+                    stop_state = False
+                    go_streak = 0
+            else:
+                go_streak = 0
+        else:
+            # currently going: wait for STOP confirmation
+            if want_stop:
+                stop_streak += 1
+                go_streak = 0
+                if stop_streak >= args.min_stop_frames:
+                    stop_state = True
+                    stop_streak = 0
+            else:
+                stop_streak = 0
+
+        # Debug dump of unique classes occasionally
+        if args.debug and (frame_count % (args.print_every * 10) == 0):
+            uniq = np.unique(cls_map)
+            head = uniq[:10].tolist()
+            print(f"[debug] cls_map shape={cls_map.shape} dtype={cls_map.dtype} uniq_count={len(uniq)} uniq_head={head}", flush=True)
 
     picam2.pre_callback = on_frame
     picam2.start(config, show_preview=False)
 
     print("=== IMX500 segmentation score (AI runs on camera) ===")
     print(f"model: {args.model}")
-    if args.floor_class is None:
-        print("Run once to observe dominant class id on the FLOOR, then set --floor-class <id>.")
-    else:
-        print(f"floor_class={args.floor_class} stop_threshold={args.stop_threshold}")
-    print("Press Ctrl+C to stop.\n")
+    print(f"bg_class={args.bg_class} stop_threshold={args.stop_threshold} go_threshold={args.go_threshold}")
+    print(f"ema_alpha={args.ema_alpha} min_stop_frames={args.min_stop_frames} min_go_frames={args.min_go_frames}")
+    print("Press Ctrl+C to stop.", flush=True)
+
+    last_print_frame = -1
 
     try:
         while True:
-            frame = stats["frame"]
-            if frame > 0 and frame % args.print_every == 0:
-                elapsed = time.time() - stats["t0"]
-                fps = frame / elapsed if elapsed > 0 else 0.0
+            if frame_count > 0 and (frame_count % args.print_every == 0) and frame_count != last_print_frame:
+                last_print_frame = frame_count
 
-                top3 = stats["top3"]
-                dom_id = stats["dominant"]
-                dom_ratio = stats["dominant_ratio"]
+                elapsed = time.time() - t0
+                fps = frame_count / elapsed if elapsed > 0 else 0.0
 
-                line = f"fps={fps:5.1f}  dominant={dom_id}({dom_ratio:.2f})  top3={top3}"
+                fraw = free_raw
+                fema = free_ema if free_ema is not None else free_raw
 
-                if args.floor_class is not None:
-                    free = stats["free_ratio"] if stats["free_ratio"] is not None else 0.0
-                    stop = free < args.stop_threshold
-                    line += f"  FREE={free:.2f}  STOP={stop}"
-                else:
-                    line += "  (set --floor-class <id> to enable FREE/STOP)"
-
-                if stats["last_err"]:
-                    line += f"  last_err={stats['last_err']}"
-                    stats["last_err"] = None
-
+                line = (
+                    f"fps={fps:5.1f}  dominant={dominant}({dominant_ratio:.2f})  top3={top3}  "
+                    f"FREE={fraw:.2f}  EMA={fema:.2f}  STOP={stop_state}"
+                )
                 print(line, flush=True)
-                time.sleep(0.05)
 
             if args.max_fps and args.max_fps > 0:
                 time.sleep(max(0.0, 1.0 / args.max_fps))
@@ -262,10 +254,11 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        safe_stop(picam2)
-
-    return 0
+        try:
+            picam2.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

@@ -369,7 +369,7 @@ def main():
         except Exception:
             pass
 
-        # Reset hardware
+        # Reset hardware.
         try:
             if servo:
                 servo.set_center()

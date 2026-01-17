@@ -1,5 +1,3 @@
-# app/main.py
-
 import time
 import sys
 import os
@@ -17,26 +15,22 @@ from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
 from input.dualshock_input import DualShockInput
 
+from app.autopilot import Autopilot, AutoCruiseConfig, DriveMode
+from app.event_logger import EventLogger
 
-# =========================================================
-# Helpers
-# =========================================================
+from vision.segscore.service import SegScoreService
+
 
 def gamepad_available(device_path: str) -> bool:
     return bool(device_path) and os.path.exists(device_path)
 
 
-# =========================================================
-# Main
-# =========================================================
-
 def main():
     has_tty = sys.stdin.isatty()
 
-    # =========================================================
+    # -----------------------
     # Hardware
-    # =========================================================
-
+    # -----------------------
     try:
         servo = Servo(
             channel=0,
@@ -59,15 +53,13 @@ def main():
         print("[WARN] Throttle not available:", e)
         throttle = None
 
-    # =========================================================
+    # -----------------------
     # Controllers
-    # =========================================================
-
+    # -----------------------
     steering_mapper = SteeringMapper(
         dead_zone=config.STEERING_DEAD_ZONE,
         invert=config.STEERING_INVERT,
     )
-
     steering = SteeringController(steering_mapper, servo) if servo else None
 
     motor = (
@@ -82,13 +74,11 @@ def main():
 
     arm = ArmController()
 
-    # =========================================================
+    # -----------------------
     # Inputs
-    # =========================================================
-
+    # -----------------------
     keyboard_steer = None
     keyboard_throttle = None
-
     if config.KEYBOARD_ENABLED and has_tty:
         keyboard_steer = KeyboardSteeringInput(step=0.1)
         keyboard_throttle = KeyboardThrottleInput(step=0.1)
@@ -97,110 +87,175 @@ def main():
         print("[SYSTEM] Keyboard input disabled (no TTY)")
 
     gamepad = None
+    gamepad_iter = None
     last_gamepad_check = 0.0
-    GAMEPAD_RETRY_INTERVAL = 2.0  # seconds
+    GAMEPAD_RETRY_INTERVAL = 2.0
 
     if not config.GAMEPAD_ENABLED:
         print("[SYSTEM] Gamepad disabled in config")
 
+    # -----------------------
+    # Vision (IMX500 seg score)
+    # -----------------------
+    # Берём конфиг точно такой же, как в демо: python -m vision.demos.print_segmentation_score ...
+    vision = SegScoreService()
+    vision.start()
+    print("[SYSTEM] Vision runner started")
+
+    # -----------------------
+    # Autopilot + logging
+    # -----------------------
+    ap = Autopilot(AutoCruiseConfig(
+        speed_default=getattr(config, "AUTO_CRUISE_SPEED_DEFAULT", 0.15),
+        speed_min=getattr(config, "AUTO_CRUISE_SPEED_MIN", 0.05),
+        speed_max=getattr(config, "AUTO_CRUISE_SPEED_MAX", 0.35),
+        speed_step=getattr(config, "AUTO_CRUISE_SPEED_STEP", 0.02),
+    ))
+    logger = EventLogger(log_dir=getattr(config, "LOG_DIR", "logs"))
+
+    logger.write("boot", mode=ap.mode)
+
     print("[SYSTEM] Main loop started")
 
-    # =========================================================
-    # Main loop
-    # =========================================================
+    last_stop = None
+    last_mode = ap.mode
 
     try:
         while True:
             now = time.time()
 
             steer = 0.0
-            throttle_value = 0.0
+            manual_throttle = 0.0
+            mode_event = None
+            cruise_delta = 0
 
-            # -----------------------------------------------------
-            # Gamepad hot-plug / reconnect
-            # -----------------------------------------------------
-
+            # -----------------------
+            # Gamepad hot-plug
+            # -----------------------
             if config.GAMEPAD_ENABLED:
-                # Try to connect if missing
                 if gamepad is None and now - last_gamepad_check > GAMEPAD_RETRY_INTERVAL:
                     last_gamepad_check = now
-
                     if gamepad_available(config.GAMEPAD_DEVICE):
                         try:
                             gamepad = DualShockInput(config.GAMEPAD_DEVICE)
+                            gamepad_iter = gamepad.values()  # IMPORTANT: create once!
                             print("[SYSTEM] Gamepad connected")
+                            logger.write("gamepad_connected")
                         except Exception as e:
                             print("[WARN] Failed to init gamepad:", e)
 
-                # Detect disconnect
                 elif gamepad is not None and not gamepad_available(config.GAMEPAD_DEVICE):
                     print("[WARN] Gamepad disconnected")
+                    logger.write("gamepad_disconnected")
                     gamepad = None
+                    gamepad_iter = None
 
-            # -----------------------------------------------------
-            # Gamepad input
-            # -----------------------------------------------------
-
-            if gamepad:
+            # -----------------------
+            # Read gamepad
+            # -----------------------
+            if gamepad_iter:
                 try:
-                    ls, rs, gp_throttle, gp_arm_event = next(gamepad.values())
+                    ls, rs, gp_throttle, gp_arm_event, mode_event, cruise_delta = next(gamepad_iter)
                 except StopIteration:
                     print("[WARN] Gamepad input stopped (device lost)")
+                    logger.write("gamepad_input_stopped")
                     gamepad = None
+                    gamepad_iter = None
                     continue
 
                 steer = rs if abs(rs) > abs(ls) else ls
-                throttle_value = gp_throttle
+                manual_throttle = gp_throttle
 
                 if gp_arm_event == "arm":
                     arm.arm()
+                    logger.write("arm", source="gamepad")
                 elif gp_arm_event == "disarm":
                     arm.disarm()
+                    logger.write("disarm", source="gamepad")
 
-            # -----------------------------------------------------
-            # Keyboard input
-            # -----------------------------------------------------
-
+            # -----------------------
+            # Keyboard (optional)
+            # -----------------------
             if keyboard_steer and keyboard_throttle:
                 steer += keyboard_steer.read()
-                throttle_value += keyboard_throttle.read()
+                manual_throttle += keyboard_throttle.read()
 
                 if keyboard_throttle.arm_event == "arm":
                     arm.arm()
+                    logger.write("arm", source="keyboard")
                 elif keyboard_throttle.arm_event == "disarm":
                     arm.disarm()
+                    logger.write("disarm", source="keyboard")
 
-            # -----------------------------------------------------
-            # Clamp
-            # -----------------------------------------------------
+            # -----------------------
+            # Mode + cruise speed updates
+            # -----------------------
+            if mode_event == "toggle_auto_cruise":
+                ap.toggle_auto_cruise()
+                logger.write("mode_change", mode=ap.mode, cruise_speed=ap.cruise_speed)
 
+            if cruise_delta != 0:
+                ap.apply_cruise_delta(cruise_delta)
+                logger.write("cruise_speed", mode=ap.mode, cruise_speed=ap.cruise_speed, delta=cruise_delta)
+
+            # -----------------------
+            # Vision latest
+            # -----------------------
+            st = vision.get()
+vision.maybe_snapshot_on_change(event_prefix="stopgo")
+            is_stop = bool(st.is_stopped) if st is not None else False
+            free = float(st.free_ratio) if st is not None else None
+            ema = float(st.ema_free) if st is not None else None
+
+            # log STOP edge
+            if last_stop is None:
+                last_stop = is_stop
+            elif is_stop != last_stop:
+                logger.write("stop_change", stop=is_stop, free=free, ema=ema, dominant=getattr(st, "dominant", None))
+                last_stop = is_stop
+
+            # -----------------------
+            # Clamp steer & manual throttle
+            # -----------------------
             steer = max(-1.0, min(1.0, steer))
-            throttle_value = max(-1.0, min(1.0, throttle_value))
+            manual_throttle = max(-1.0, min(1.0, manual_throttle))
 
-            # -----------------------------------------------------
-            # Apply
-            # -----------------------------------------------------
+            # -----------------------
+            # Compute final throttle (manual vs auto)
+            # -----------------------
+            final_throttle = ap.compute_throttle(
+                manual_throttle=manual_throttle,
+                stop=is_stop,
+                armed=arm.armed,
+            )
 
+            # -----------------------
+            # Apply to hardware
+            # -----------------------
             if steering:
                 steering.update(steer)
 
             if motor:
                 if arm.armed:
-                    motor.update(throttle_value)
+                    motor.update(final_throttle)
                 else:
                     motor.stop()
 
-            # -----------------------------------------------------
-            # Debug
-            # -----------------------------------------------------
-
+            # -----------------------
+            # Console debug (light)
+            # -----------------------
             if not hasattr(main, "_last_log"):
                 main._last_log = 0.0
 
             if now - main._last_log > 0.5:
+                if ap.mode != last_mode:
+                    last_mode = ap.mode
                 print(
-                    f"[DEBUG] steer={steer:+.2f} "
-                    f"throttle={throttle_value:+.2f} "
+                    f"[DEBUG] mode={ap.mode} "
+                    f"cruise={ap.cruise_speed:.2f} "
+                    f"stop={is_stop} free={free if free is not None else 'NA'} "
+                    f"steer={steer:+.2f} "
+                    f"thr={final_throttle:+.2f} "
                     f"armed={arm.armed}"
                 )
                 main._last_log = now
@@ -212,10 +267,16 @@ def main():
 
     finally:
         print("[SYSTEM] Shutting down safely")
+        logger.write("shutdown")
+        logger.close()
+
+        try:
+            vision.stop()
+        except Exception:
+            pass
 
         if servo:
             servo.set_center()
-
         if throttle:
             throttle.set_neutral()
 

@@ -13,3 +13,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Runtime logs / snapshots
+logs/
+logs/**

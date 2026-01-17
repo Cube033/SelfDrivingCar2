@@ -203,7 +203,7 @@ def main():
             # -----------------------
             st = vision.get()
             vision.maybe_snapshot_on_change(event_prefix="stopgo")
-            is_stop = bool(st.is_stopped) if st is not None else False
+            is_stop = bool(st.is_stopped) if st is not None else True
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
 

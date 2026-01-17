@@ -1,6 +1,9 @@
-import time
-import sys
 import os
+import sys
+import time
+import signal
+import traceback
+
 import config
 
 from hardware.servo import Servo
@@ -15,7 +18,7 @@ from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
 from input.dualshock_input import DualShockInput
 
-from app.autopilot import Autopilot, AutoCruiseConfig, DriveMode
+from app.autopilot import Autopilot, AutoCruiseConfig
 from app.event_logger import EventLogger
 
 from vision.segscore.service import SegScoreService
@@ -25,12 +28,45 @@ def gamepad_available(device_path: str) -> bool:
     return bool(device_path) and os.path.exists(device_path)
 
 
+def clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
 def main():
     has_tty = sys.stdin.isatty()
+    pid = os.getpid()
+
+    # -----------------------
+    # Logging
+    # -----------------------
+    logger = EventLogger(log_dir=getattr(config, "LOG_DIR", "logs"))
+    logger.write("boot", pid=pid, tty=has_tty)
+
+    # -----------------------
+    # Graceful shutdown
+    # -----------------------
+    stopping = {"flag": False}
+
+    def request_stop(reason: str):
+        if not stopping["flag"]:
+            stopping["flag"] = True
+            logger.write("stop_requested", reason=reason)
+
+    def _sigterm(_signum, _frame):
+        request_stop("SIGTERM")
+
+    def _sigint(_signum, _frame):
+        request_stop("SIGINT")
+
+    signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGINT, _sigint)
 
     # -----------------------
     # Hardware
     # -----------------------
+    servo = None
+    throttle = None
+
     try:
         servo = Servo(
             channel=0,
@@ -38,9 +74,10 @@ def main():
             left_us=config.SERVO_LEFT_US,
             right_us=config.SERVO_RIGHT_US,
         )
+        logger.write("servo_ok")
     except Exception as e:
+        logger.write("servo_fail", err=str(e))
         print("[WARN] Servo not available:", e)
-        servo = None
 
     try:
         throttle = Throttle(
@@ -49,9 +86,10 @@ def main():
             forward_us=config.THROTTLE_FORWARD_US,
             reverse_us=config.THROTTLE_REVERSE_US,
         )
+        logger.write("throttle_ok")
     except Exception as e:
+        logger.write("throttle_fail", err=str(e))
         print("[WARN] Throttle not available:", e)
-        throttle = None
 
     # -----------------------
     # Controllers
@@ -82,9 +120,11 @@ def main():
     if config.KEYBOARD_ENABLED and has_tty:
         keyboard_steer = KeyboardSteeringInput(step=0.1)
         keyboard_throttle = KeyboardThrottleInput(step=0.1)
+        logger.write("keyboard_enabled")
         print("[SYSTEM] Keyboard input enabled")
     else:
-        print("[SYSTEM] Keyboard input disabled (no TTY)")
+        logger.write("keyboard_disabled", reason="no_tty_or_disabled")
+        print("[SYSTEM] Keyboard input disabled (no TTY or disabled)")
 
     gamepad = None
     gamepad_iter = None
@@ -92,36 +132,49 @@ def main():
     GAMEPAD_RETRY_INTERVAL = 2.0
 
     if not config.GAMEPAD_ENABLED:
+        logger.write("gamepad_disabled_in_config")
         print("[SYSTEM] Gamepad disabled in config")
 
     # -----------------------
     # Vision (IMX500 seg score)
     # -----------------------
-    # Берём конфиг точно такой же, как в демо: python -m vision.demos.print_segmentation_score ...
     vision = SegScoreService()
-    vision.start()
-    print("[SYSTEM] Vision runner started")
+    vision_ok = False
+    try:
+        vision.start()
+        vision_ok = True
+        logger.write("vision_started")
+        print("[SYSTEM] Vision runner started")
+    except Exception as e:
+        # Главное: не падаем. Просто запрещаем круиз (stop=True по умолчанию).
+        logger.write("vision_failed", err=str(e), tb=traceback.format_exc()[-2000:])
+        print("[WARN] Vision start failed:", e)
 
     # -----------------------
-    # Autopilot + logging
+    # Autopilot config
     # -----------------------
-    ap = Autopilot(AutoCruiseConfig(
-        speed_default=getattr(config, "AUTO_CRUISE_SPEED_DEFAULT", 0.15),
-        speed_min=getattr(config, "AUTO_CRUISE_SPEED_MIN", 0.05),
-        speed_max=getattr(config, "AUTO_CRUISE_SPEED_MAX", 0.35),
-        speed_step=getattr(config, "AUTO_CRUISE_SPEED_STEP", 0.02),
-    ))
-    logger = EventLogger(log_dir=getattr(config, "LOG_DIR", "logs"))
+    ap = Autopilot(
+        AutoCruiseConfig(
+            speed_default=getattr(config, "AUTO_CRUISE_SPEED_DEFAULT", 0.15),
+            speed_min=getattr(config, "AUTO_CRUISE_SPEED_MIN", 0.05),
+            speed_max=getattr(config, "AUTO_CRUISE_SPEED_MAX", 0.35),
+            speed_step=getattr(config, "AUTO_CRUISE_SPEED_STEP", 0.02),
+        )
+    )
 
-    logger.write("boot", mode=ap.mode)
-
+    logger.write("main_loop_start", mode=ap.mode, cruise_speed=ap.cruise_speed, vision_ok=vision_ok)
     print("[SYSTEM] Main loop started")
 
     last_stop = None
     last_mode = ap.mode
+    last_debug = 0.0
+
+    # watchdog: если нет никаких “ручных” действий — можно стопить вперёд (опционально)
+    last_manual_activity = time.time()
+    MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)  # выключен по умолчанию
 
     try:
-        while True:
+        while not stopping["flag"]:
             now = time.time()
 
             steer = 0.0
@@ -139,14 +192,15 @@ def main():
                         try:
                             gamepad = DualShockInput(config.GAMEPAD_DEVICE)
                             gamepad_iter = gamepad.values()  # IMPORTANT: create once!
-                            print("[SYSTEM] Gamepad connected")
                             logger.write("gamepad_connected")
+                            print("[SYSTEM] Gamepad connected")
                         except Exception as e:
+                            logger.write("gamepad_init_failed", err=str(e))
                             print("[WARN] Failed to init gamepad:", e)
 
                 elif gamepad is not None and not gamepad_available(config.GAMEPAD_DEVICE):
-                    print("[WARN] Gamepad disconnected")
                     logger.write("gamepad_disconnected")
+                    print("[WARN] Gamepad disconnected")
                     gamepad = None
                     gamepad_iter = None
 
@@ -157,14 +211,17 @@ def main():
                 try:
                     ls, rs, gp_throttle, gp_arm_event, mode_event, cruise_delta = next(gamepad_iter)
                 except StopIteration:
-                    print("[WARN] Gamepad input stopped (device lost)")
                     logger.write("gamepad_input_stopped")
+                    print("[WARN] Gamepad input stopped (device lost)")
                     gamepad = None
                     gamepad_iter = None
                     continue
 
                 steer = rs if abs(rs) > abs(ls) else ls
                 manual_throttle = gp_throttle
+
+                if abs(steer) > 0.02 or abs(manual_throttle) > 0.02 or gp_arm_event:
+                    last_manual_activity = now
 
                 if gp_arm_event == "arm":
                     arm.arm()
@@ -177,8 +234,13 @@ def main():
             # Keyboard (optional)
             # -----------------------
             if keyboard_steer and keyboard_throttle:
-                steer += keyboard_steer.read()
-                manual_throttle += keyboard_throttle.read()
+                ks = keyboard_steer.read()
+                kt = keyboard_throttle.read()
+                steer += ks
+                manual_throttle += kt
+
+                if abs(ks) > 0.0 or abs(kt) > 0.0 or keyboard_throttle.arm_event:
+                    last_manual_activity = now
 
                 if keyboard_throttle.arm_event == "arm":
                     arm.arm()
@@ -188,7 +250,7 @@ def main():
                     logger.write("disarm", source="keyboard")
 
             # -----------------------
-            # Mode + cruise speed updates
+            # Mode + cruise updates
             # -----------------------
             if mode_event == "toggle_auto_cruise":
                 ap.toggle_auto_cruise()
@@ -201,8 +263,16 @@ def main():
             # -----------------------
             # Vision latest
             # -----------------------
-            st = vision.get()
-            vision.maybe_snapshot_on_change(event_prefix="stopgo")
+            st = None
+            try:
+                st = vision.get() if vision_ok else None
+                if vision_ok:
+                    vision.maybe_snapshot_on_change(event_prefix="stopgo")
+            except Exception as e:
+                # Vision может временно глючить — не валим всё приложение.
+                logger.write("vision_runtime_error", err=str(e))
+                st = None
+
             is_stop = bool(st.is_stopped) if st is not None else True
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
@@ -211,14 +281,20 @@ def main():
             if last_stop is None:
                 last_stop = is_stop
             elif is_stop != last_stop:
-                logger.write("stop_change", stop=is_stop, free=free, ema=ema, dominant=getattr(st, "dominant", None))
+                logger.write(
+                    "stop_change",
+                    stop=is_stop,
+                    free=free,
+                    ema=ema,
+                    dominant=getattr(st, "dominant", None) if st else None,
+                )
                 last_stop = is_stop
 
             # -----------------------
-            # Clamp steer & manual throttle
+            # Clamp inputs
             # -----------------------
-            steer = max(-1.0, min(1.0, steer))
-            manual_throttle = max(-1.0, min(1.0, manual_throttle))
+            steer = clamp(steer, -1.0, 1.0)
+            manual_throttle = clamp(manual_throttle, -1.0, 1.0)
 
             # -----------------------
             # Compute final throttle (manual vs auto)
@@ -230,7 +306,18 @@ def main():
             )
 
             # -----------------------
-            # Apply to hardware
+            # HARD safety layer:
+            # stop=True => запрещаем движение вперед, но оставляем возможность тормозить/сдавать назад
+            # -----------------------
+            if is_stop and final_throttle > 0.0:
+                final_throttle = 0.0
+
+            # optional watchdog: если давно нет ручной активности — тоже не едем вперед
+            if now - last_manual_activity > MANUAL_ACTIVITY_TIMEOUT and final_throttle > 0.0:
+                final_throttle = 0.0
+
+            # -----------------------
+            # Apply hardware
             # -----------------------
             if steering:
                 steering.update(steer)
@@ -242,12 +329,9 @@ def main():
                     motor.stop()
 
             # -----------------------
-            # Console debug (light)
+            # Console debug
             # -----------------------
-            if not hasattr(main, "_last_log"):
-                main._last_log = 0.0
-
-            if now - main._last_log > 0.5:
+            if now - last_debug > 0.5:
                 if ap.mode != last_mode:
                     last_mode = ap.mode
                 print(
@@ -256,29 +340,52 @@ def main():
                     f"stop={is_stop} free={free if free is not None else 'NA'} "
                     f"steer={steer:+.2f} "
                     f"thr={final_throttle:+.2f} "
-                    f"armed={arm.armed}"
+                    f"armed={arm.armed} "
+                    f"vision_ok={vision_ok}"
                 )
-                main._last_log = now
+                last_debug = now
 
             time.sleep(0.02)  # 50 Hz
 
-    except KeyboardInterrupt:
-        print("[SYSTEM] Keyboard interrupt")
+    except Exception as e:
+        logger.write("fatal_error", err=str(e), tb=traceback.format_exc()[-4000:])
+        raise
 
     finally:
         print("[SYSTEM] Shutting down safely")
         logger.write("shutdown")
-        logger.close()
 
+        # STOP MOTOR FIRST
         try:
-            vision.stop()
+            if motor:
+                motor.stop()
         except Exception:
             pass
 
-        if servo:
-            servo.set_center()
-        if throttle:
-            throttle.set_neutral()
+        # Vision stop
+        try:
+            if vision_ok:
+                vision.stop()
+        except Exception:
+            pass
+
+        # Reset hardware
+        try:
+            if servo:
+                servo.set_center()
+        except Exception:
+            pass
+
+        try:
+            if throttle:
+                throttle.set_neutral()
+        except Exception:
+            pass
+
+        try:
+            logger.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

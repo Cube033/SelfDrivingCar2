@@ -23,6 +23,9 @@ from app.event_logger import EventLogger
 
 from vision.segscore.service import SegScoreService
 
+# DISPLAY
+from display import DisplayService, DisplayState, DisplayConfig
+
 
 def gamepad_available(device_path: str) -> bool:
     return bool(device_path) and os.path.exists(device_path)
@@ -30,6 +33,24 @@ def gamepad_available(device_path: str) -> bool:
 
 def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
+
+
+def _mode_to_big_label(ap_mode: str) -> str:
+    """
+    Маппинг режима на 1-2 символа справа на OLED.
+    Я НЕ знаю точные значения ap.mode в твоём Autopilot, поэтому делаю безопасно:
+    - если содержит 'auto' => 'A'
+    - если содержит 'manual' => 'M'
+    - иначе первые 2 символа.
+    """
+    m = (ap_mode or "").lower()
+    if "auto" in m:
+        return "A"
+    if "man" in m:
+        return "M"
+    if len(ap_mode or "") == 0:
+        return "?"
+    return (ap_mode[:2]).upper()
 
 
 def main():
@@ -146,9 +167,23 @@ def main():
         logger.write("vision_started")
         print("[SYSTEM] Vision runner started")
     except Exception as e:
-        # Главное: не падаем. Просто запрещаем круиз (stop=True по умолчанию).
         logger.write("vision_failed", err=str(e), tb=traceback.format_exc()[-2000:])
         print("[WARN] Vision start failed:", e)
+
+    # -----------------------
+    # Display
+    # -----------------------
+    display = None
+    display_ok = False
+    try:
+        display = DisplayService(DisplayConfig(i2c_bus=1, i2c_address=0x3C, rotate=0, max_fps=10.0), enabled=True)
+        display.start()
+        display_ok = True
+        logger.write("display_started")
+        print("[SYSTEM] Display started")
+    except Exception as e:
+        logger.write("display_failed", err=str(e))
+        print("[WARN] Display start failed:", e)
 
     # -----------------------
     # Autopilot config
@@ -169,9 +204,8 @@ def main():
     last_mode = ap.mode
     last_debug = 0.0
 
-    # watchdog: если нет никаких “ручных” действий — можно стопить вперёд (опционально)
     last_manual_activity = time.time()
-    MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)  # выключен по умолчанию
+    MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)
 
     try:
         while not stopping["flag"]:
@@ -269,7 +303,6 @@ def main():
                 if vision_ok:
                     vision.maybe_snapshot_on_change(event_prefix="stopgo")
             except Exception as e:
-                # Vision может временно глючить — не валим всё приложение.
                 logger.write("vision_runtime_error", err=str(e))
                 st = None
 
@@ -291,6 +324,28 @@ def main():
                 last_stop = is_stop
 
             # -----------------------
+            # Display update (vision + mode + armed)
+            # -----------------------
+            if display_ok and display and st is not None:
+                try:
+                    mode_big = _mode_to_big_label(ap.mode)
+                    display.update(
+                        DisplayState(
+                            grid_occ=getattr(st, "grid_occ", None),
+                            grid_w=getattr(st, "grid_w", 32),
+                            grid_h=getattr(st, "grid_h", 32),
+                            mode_big=mode_big,
+                            armed=arm.armed,
+                            is_stop=is_stop,
+                            free_ratio=free,
+                            fps=float(getattr(st, "fps", 0.0)) if getattr(st, "fps", None) is not None else None,
+                        )
+                    )
+                except Exception as e:
+                    # дисплей не должен валить main loop
+                    logger.write("display_runtime_error", err=str(e))
+
+            # -----------------------
             # Clamp inputs
             # -----------------------
             steer = clamp(steer, -1.0, 1.0)
@@ -306,13 +361,11 @@ def main():
             )
 
             # -----------------------
-            # HARD safety layer:
-            # stop=True => запрещаем движение вперед, но оставляем возможность тормозить/сдавать назад
+            # HARD safety layer
             # -----------------------
             if is_stop and final_throttle > 0.0:
                 final_throttle = 0.0
 
-            # optional watchdog: если давно нет ручной активности — тоже не едем вперед
             if now - last_manual_activity > MANUAL_ACTIVITY_TIMEOUT and final_throttle > 0.0:
                 final_throttle = 0.0
 
@@ -359,6 +412,13 @@ def main():
         try:
             if motor:
                 motor.stop()
+        except Exception:
+            pass
+
+        # Display stop
+        try:
+            if display_ok and display:
+                display.stop()
         except Exception:
             pass
 

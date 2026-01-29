@@ -13,6 +13,11 @@ class SegScoreServiceConfig:
     snapshot_dir: str = "logs/vision"
     snapshot_enabled: bool = True
 
+    # OLED grid
+    grid_w: int = 32
+    grid_h: int = 32
+    occ_threshold: float = 0.20
+
 
 class SegScoreService:
     """
@@ -33,10 +38,12 @@ class SegScoreService:
             ignore_zero=self.cli_cfg.ignore_zero,
             debug=self.cli_cfg.debug,
             stop_cfg=self.cli_cfg.stop_cfg,
+            grid_w=self.cfg.grid_w,
+            grid_h=self.cfg.grid_h,
+            occ_threshold=self.cfg.occ_threshold,
         )
 
         self.snap = SnapshotWriter(self.cfg.snapshot_dir) if self.cfg.snapshot_enabled else None
-
         self._last_stop: Optional[bool] = None
 
     def start(self) -> None:

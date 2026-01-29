@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Callable
+from typing import Optional, List, Tuple
 
 import numpy as np
 from picamera2 import Picamera2, CompletedRequest
@@ -26,6 +28,60 @@ class FrameStats:
     uniq_head: List[int]
     uniq_count: int
 
+    # --- for OLED grid
+    grid_w: int
+    grid_h: int
+    grid_occ: List[int]  # 0/1 length grid_w*grid_h
+
+
+def _downsample_occupancy(
+    roi_map: np.ndarray,
+    *,
+    grid_w: int,
+    grid_h: int,
+    bg_class: int,
+    occ_threshold: float = 0.20,
+) -> List[int]:
+    """
+    Convert ROI class-id map into occupancy grid.
+    occupancy=1 means obstacle (not background) dominates the cell.
+
+    occ_threshold:
+      share of non-bg pixels to mark cell as obstacle.
+    """
+    if roi_map is None or roi_map.size == 0:
+        return [0] * (grid_w * grid_h)
+
+    h, w = roi_map.shape[:2]
+    if h < grid_h or w < grid_w:
+        # if ROI слишком маленький — fallback простым сэмплингом
+        ys = np.linspace(0, h - 1, grid_h).astype(int)
+        xs = np.linspace(0, w - 1, grid_w).astype(int)
+        occ = []
+        for y in ys:
+            for x in xs:
+                occ.append(1 if int(roi_map[y, x]) != bg_class else 0)
+        return occ
+
+    # режем так, чтобы делилось на grid
+    bh = h // grid_h
+    bw = w // grid_w
+    hh = bh * grid_h
+    ww = bw * grid_w
+    cropped = roi_map[:hh, :ww]
+
+    # obstacle mask
+    obs = (cropped != bg_class).astype(np.uint8)
+
+    # reshape blocks: (grid_h, bh, grid_w, bw)
+    blocks = obs.reshape(grid_h, bh, grid_w, bw)
+
+    # mean over each cell
+    cell_mean = blocks.mean(axis=(1, 3))  # shape: (grid_h, grid_w)
+
+    occ = (cell_mean >= occ_threshold).astype(np.uint8)
+    return [int(x) for x in occ.reshape(-1)]
+
 
 class Imx500SegScoreRunner:
     def __init__(
@@ -36,6 +92,10 @@ class Imx500SegScoreRunner:
         ignore_zero: bool,
         debug: bool,
         stop_cfg: StopLogicConfig,
+        *,
+        grid_w: int = 32,
+        grid_h: int = 32,
+        occ_threshold: float = 0.20,
     ):
         self.model_path = model_path
         self.roi_w = roi_w
@@ -43,6 +103,10 @@ class Imx500SegScoreRunner:
         self.ignore_zero = ignore_zero
         self.debug = debug
         self.stop_decider = StopDecider(stop_cfg)
+
+        self.grid_w = int(grid_w)
+        self.grid_h = int(grid_h)
+        self.occ_threshold = float(occ_threshold)
 
         self._imx500: Optional[IMX500] = None
         self._picam2: Optional[Picamera2] = None
@@ -103,7 +167,17 @@ class Imx500SegScoreRunner:
 
             # free ratio + ema + stop
             is_stopped, ema_free = self.stop_decider.update(roi_map, top3)
-            free_ratio = float(np.mean(roi_map == self.stop_decider.cfg.bg_class)) if roi_map.size else 0.0
+            bg = self.stop_decider.cfg.bg_class
+            free_ratio = float(np.mean(roi_map == bg)) if roi_map.size else 0.0
+
+            # grid for OLED
+            grid_occ = _downsample_occupancy(
+                roi_map,
+                grid_w=self.grid_w,
+                grid_h=self.grid_h,
+                bg_class=bg,
+                occ_threshold=self.occ_threshold,
+            )
 
             elapsed = time.time() - self._t0
             fps = frame / elapsed if elapsed > 0 else 0.0
@@ -125,6 +199,9 @@ class Imx500SegScoreRunner:
                 mask_dtype=str(cls_map.dtype),
                 uniq_head=uniq_head,
                 uniq_count=uniq_count,
+                grid_w=self.grid_w,
+                grid_h=self.grid_h,
+                grid_occ=grid_occ,
             )
 
         self._picam2.pre_callback = on_frame

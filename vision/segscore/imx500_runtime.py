@@ -8,6 +8,7 @@ import numpy as np
 from picamera2 import Picamera2, CompletedRequest
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
+from PIL import Image
 
 from .roi import Roi, compute_roi
 from .stats import topk_classes, safe_class_map, StopDecider, StopLogicConfig
@@ -24,6 +25,13 @@ class FrameStats:
     free_ratio: float
     ema_free: float
     is_stopped: bool
+    weighted_free: float
+    weighted_occ: float
+    closest_row: int
+    closest_norm: float
+    occ_left: float
+    occ_center: float
+    occ_right: float
     mask_dtype: str
     uniq_head: List[int]
     uniq_count: int
@@ -96,6 +104,8 @@ class Imx500SegScoreRunner:
         grid_w: int = 32,
         grid_h: int = 32,
         occ_threshold: float = 0.20,
+        snapshot_images: bool = False,
+        snapshot_size: Tuple[int, int] = (320, 240),
     ):
         self.model_path = model_path
         self.roi_w = roi_w
@@ -107,6 +117,8 @@ class Imx500SegScoreRunner:
         self.grid_w = int(grid_w)
         self.grid_h = int(grid_h)
         self.occ_threshold = float(occ_threshold)
+        self.snapshot_images = bool(snapshot_images)
+        self.snapshot_size = (int(snapshot_size[0]), int(snapshot_size[1]))
 
         self._imx500: Optional[IMX500] = None
         self._picam2: Optional[Picamera2] = None
@@ -117,6 +129,8 @@ class Imx500SegScoreRunner:
 
         # latest stats (written by pre_callback)
         self._latest: Optional[FrameStats] = None
+        self._last_img: Optional[Image.Image] = None
+        self._last_img_frame: int = -1
 
     def start(self):
         # 1) IMX500 must be created before Picamera2
@@ -165,8 +179,8 @@ class Imx500SegScoreRunner:
             dom_id = top3[0][0] if top3 else -1
             dom_ratio = top3[0][1] if top3 else 0.0
 
-            # free ratio + ema + stop
-            is_stopped, ema_free = self.stop_decider.update(roi_map, top3)
+            # free ratio + ema + stop + proximity stats
+            is_stopped, ema_free, prox = self.stop_decider.update(roi_map, top3)
             bg = self.stop_decider.cfg.bg_class
             free_ratio = float(np.mean(roi_map == bg)) if roi_map.size else 0.0
 
@@ -196,6 +210,13 @@ class Imx500SegScoreRunner:
                 free_ratio=free_ratio,
                 ema_free=float(ema_free if ema_free is not None else free_ratio),
                 is_stopped=bool(is_stopped),
+                weighted_free=float(getattr(prox, "weighted_free", 0.0)),
+                weighted_occ=float(getattr(prox, "weighted_occ", 0.0)),
+                closest_row=int(getattr(prox, "closest_row", -1)),
+                closest_norm=float(getattr(prox, "closest_norm", 0.0)),
+                occ_left=float(getattr(prox, "occ_left", 0.0)),
+                occ_center=float(getattr(prox, "occ_center", 0.0)),
+                occ_right=float(getattr(prox, "occ_right", 0.0)),
                 mask_dtype=str(cls_map.dtype),
                 uniq_head=uniq_head,
                 uniq_count=uniq_count,
@@ -203,6 +224,17 @@ class Imx500SegScoreRunner:
                 grid_h=self.grid_h,
                 grid_occ=grid_occ,
             )
+
+            # capture snapshot image (small) if enabled
+            if self.snapshot_images:
+                try:
+                    img = request.make_image("main")
+                    if img is not None and hasattr(img, "resize"):
+                        img = img.resize(self.snapshot_size, Image.BILINEAR)
+                        self._last_img = img
+                        self._last_img_frame = frame
+                except Exception:
+                    pass
 
         self._picam2.pre_callback = on_frame
         self._picam2.start(cfg, show_preview=False)
@@ -213,3 +245,6 @@ class Imx500SegScoreRunner:
 
     def latest(self) -> Optional[FrameStats]:
         return self._latest
+
+    def get_snapshot_image(self) -> Optional[Image.Image]:
+        return self._last_img

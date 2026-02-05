@@ -68,15 +68,39 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     # big mode
     draw.text((cfg.split_x + 10, 6), mode, font=font, fill=fg)
 
+    # occupancy bars (L/C/R)
+    if state.occ_left is not None and state.occ_center is not None and state.occ_right is not None:
+        bar_x0 = cfg.split_x + 6
+        bar_y0 = 18
+        bar_h = 20
+        bar_w = 8
+        gap = 6
+
+        vals = [state.occ_left, state.occ_center, state.occ_right]
+        for i, v in enumerate(vals):
+            v = max(0.0, min(1.0, float(v)))
+            x0 = bar_x0 + i * (bar_w + gap)
+            x1 = x0 + bar_w
+            y1 = bar_y0 + bar_h
+            y0 = y1 - int(bar_h * v)
+            # outline
+            draw.rectangle([x0, bar_y0, x1, y1], outline=fg)
+            # fill
+            if v > 0.0:
+                draw.rectangle([x0 + 1, y0, x1 - 1, y1 - 1], fill=fg)
+        draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
+
     # status
-    draw.text((cfg.split_x + 2, 40), f"{arm_txt} {stop_txt}", font=font, fill=fg)
+    draw.text((cfg.split_x + 2, 44), f"{arm_txt} {stop_txt}", font=font, fill=fg)
 
     parts = []
     if state.free_ratio is not None:
         parts.append(f"F:{state.free_ratio:.2f}")
+    if state.closest_norm is not None:
+        parts.append(f"C:{state.closest_norm:.2f}")
     if state.fps is not None:
         parts.append(f"{state.fps:.1f}fps")
     if parts:
-        draw.text((cfg.split_x + 2, 52), " ".join(parts), font=font, fill=fg)
+        draw.text((cfg.split_x + 2, 54), " ".join(parts), font=font, fill=fg)
 
     return img

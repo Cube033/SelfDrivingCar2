@@ -18,10 +18,10 @@ from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
 from input.dualshock_input import DualShockInput
 
-from app.autopilot import Autopilot, AutoCruiseConfig
+from app.autopilot import Autopilot, AutoCruiseConfig, DriveMode
 from app.event_logger import EventLogger
 
-from vision.segscore.service import SegScoreService
+from vision.segscore.service import SegScoreService, SegScoreServiceConfig
 
 # DISPLAY
 from display import DisplayService, DisplayState, DisplayConfig
@@ -33,6 +33,14 @@ def gamepad_available(device_path: str) -> bool:
 
 def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
+
+
+def move_towards(cur: float, target: float, max_delta: float) -> float:
+    if cur < target:
+        return min(cur + max_delta, target)
+    if cur > target:
+        return max(cur - max_delta, target)
+    return cur
 
 
 def _mode_to_big_label(ap_mode: str) -> str:
@@ -159,7 +167,19 @@ def main():
     # -----------------------
     # Vision (IMX500 seg score)
     # -----------------------
-    vision = SegScoreService()
+    log_root = getattr(config, "LOG_DIR", "logs")
+
+    vision = SegScoreService(
+        SegScoreServiceConfig(
+            snapshot_dir=os.path.join(log_root, "vision"),
+            snapshot_enabled=getattr(config, "SNAPSHOT_ENABLED", True),
+            snapshot_images=getattr(config, "SNAPSHOT_IMAGES", True),
+            snapshot_image_w=getattr(config, "SNAPSHOT_IMAGE_W", 320),
+            snapshot_image_h=getattr(config, "SNAPSHOT_IMAGE_H", 240),
+            snapshot_on_stop=getattr(config, "SNAPSHOT_ON_STOP_DECISION", True),
+            snapshot_on_turn=getattr(config, "SNAPSHOT_ON_TURN_DECISION", False),
+        )
+    )
     vision_ok = False
     try:
         vision.start()
@@ -201,8 +221,11 @@ def main():
     print("[SYSTEM] Main loop started")
 
     last_stop = None
+    last_turn_decision = None
     last_mode = ap.mode
     last_debug = 0.0
+    last_loop_time = time.time()
+    auto_turn_steer = 0.0
 
     last_manual_activity = time.time()
     MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)
@@ -210,11 +233,15 @@ def main():
     try:
         while not stopping["flag"]:
             now = time.time()
+            dt = max(0.0, now - last_loop_time)
+            last_loop_time = now
 
             steer = 0.0
             manual_throttle = 0.0
             mode_event = None
             cruise_delta = 0
+            turn_decision = "none"
+            turn_changed = False
 
             # -----------------------
             # Gamepad hot-plug
@@ -324,6 +351,30 @@ def main():
                 last_stop = is_stop
 
             # -----------------------
+            # Turn decision (for snapshots / future avoidance)
+            # -----------------------
+            if st is not None:
+                occ_left = float(getattr(st, "occ_left", 0.0))
+                occ_center = float(getattr(st, "occ_center", 0.0))
+                occ_right = float(getattr(st, "occ_right", 0.0))
+                center_thresh = getattr(config, "TURN_CENTER_THRESHOLD", 0.35)
+                diff_thresh = getattr(config, "TURN_DIFF_THRESHOLD", 0.08)
+
+                if occ_center >= float(center_thresh):
+                    if (occ_left + diff_thresh) < occ_right:
+                        turn_decision = "left"
+                    elif (occ_right + diff_thresh) < occ_left:
+                        turn_decision = "right"
+                    else:
+                        turn_decision = "none"
+                else:
+                    turn_decision = "none"
+
+                if turn_decision != last_turn_decision:
+                    last_turn_decision = turn_decision
+                    turn_changed = True
+
+            # -----------------------
             # Display update (vision + mode + armed)
             # -----------------------
             if display_ok and display and st is not None:
@@ -338,6 +389,10 @@ def main():
                             armed=arm.armed,
                             is_stop=is_stop,
                             free_ratio=free,
+                            occ_left=getattr(st, "occ_left", None),
+                            occ_center=getattr(st, "occ_center", None),
+                            occ_right=getattr(st, "occ_right", None),
+                            closest_norm=getattr(st, "closest_norm", None),
                             fps=float(getattr(st, "fps", 0.0)) if getattr(st, "fps", None) is not None else None,
                         )
                     )
@@ -361,13 +416,86 @@ def main():
             )
 
             # -----------------------
-            # HARD safety layer
+            # Auto speed scaling (turning / obstacles)
             # -----------------------
-            if is_stop and final_throttle > 0.0:
-                final_throttle = 0.0
+            if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0 and st is not None:
+                scale = 1.0
 
-            if now - last_manual_activity > MANUAL_ACTIVITY_TIMEOUT and final_throttle > 0.0:
-                final_throttle = 0.0
+                turn_thresh = getattr(config, "AUTO_TURN_STEER_THRESHOLD", 0.35)
+                turn_scale = getattr(config, "AUTO_TURN_SPEED_SCALE", 0.65)
+                if abs(steer) >= float(turn_thresh):
+                    scale *= float(turn_scale)
+
+                occ_center = float(getattr(st, "occ_center", 0.0))
+                closest_norm = float(getattr(st, "closest_norm", 0.0))
+                occ_thresh = getattr(config, "AUTO_OBS_CENTER_THRESHOLD", 0.35)
+                close_thresh = getattr(config, "AUTO_CLOSEST_THRESHOLD", 0.75)
+                obs_scale = getattr(config, "AUTO_OBS_SPEED_SCALE", 0.50)
+
+                if occ_center >= float(occ_thresh) or closest_norm >= float(close_thresh):
+                    scale *= float(obs_scale)
+
+                final_throttle *= max(0.0, min(1.0, scale))
+
+            # -----------------------
+            # Auto turn control (avoidance)
+            # -----------------------
+            if ap.mode == DriveMode.AUTO_CRUISE:
+                manual_override = float(getattr(config, "AUTO_TURN_MANUAL_OVERRIDE", 0.15))
+                ramp_per_sec = float(getattr(config, "AUTO_TURN_RAMP_PER_SEC", 2.0))
+                max_delta = ramp_per_sec * dt
+
+                if abs(steer) >= manual_override:
+                    auto_turn_steer = steer
+                else:
+                    if turn_decision in ("left", "right"):
+                        turn_val = float(getattr(config, "AUTO_TURN_STEER_VALUE", 0.60))
+                        target = -abs(turn_val) if turn_decision == "left" else abs(turn_val)
+                    else:
+                        target = 0.0
+                    auto_turn_steer = move_towards(auto_turn_steer, target, max_delta)
+                steer = auto_turn_steer
+
+            # -----------------------
+            # Speed-based steering limit (AUTO only)
+            # -----------------------
+            if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0:
+                s_low = float(getattr(config, "AUTO_STEER_SPEED_LOW", 0.10))
+                s_high = float(getattr(config, "AUTO_STEER_SPEED_HIGH", 0.35))
+                max_low = float(getattr(config, "AUTO_STEER_MAX_LOW", 1.00))
+                max_high = float(getattr(config, "AUTO_STEER_MAX_HIGH", 0.50))
+
+                if s_high > s_low:
+                    t = (final_throttle - s_low) / (s_high - s_low)
+                else:
+                    t = 1.0
+                t = clamp(t, 0.0, 1.0)
+                max_steer = max_low + (max_high - max_low) * t
+                steer = clamp(steer, -abs(max_steer), abs(max_steer))
+
+            # -----------------------
+            # Turn decision snapshot (after final steer)
+            # -----------------------
+            if turn_changed and getattr(config, "SNAPSHOT_ON_TURN_DECISION", False) and st is not None:
+                vision.snapshot_event(
+                    f"turn_{turn_decision}",
+                    st,
+                    occ_left=float(getattr(st, "occ_left", 0.0)),
+                    occ_center=float(getattr(st, "occ_center", 0.0)),
+                    occ_right=float(getattr(st, "occ_right", 0.0)),
+                    steer_applied=float(steer),
+                    throttle_final=float(final_throttle),
+                )
+
+            # -----------------------
+            # HARD safety layer (AUTO only)
+            # -----------------------
+            if ap.mode != DriveMode.MANUAL:
+                if is_stop and final_throttle > 0.0:
+                    final_throttle = 0.0
+
+                if now - last_manual_activity > MANUAL_ACTIVITY_TIMEOUT and final_throttle > 0.0:
+                    final_throttle = 0.0
 
             # -----------------------
             # Apply hardware

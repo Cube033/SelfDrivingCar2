@@ -19,3 +19,9 @@ class DisplayState:
     # optional small stats
     free_ratio: Optional[float] = None
     fps: Optional[float] = None
+
+    # occupancy (weighted) for left/center/right
+    occ_left: Optional[float] = None
+    occ_center: Optional[float] = None
+    occ_right: Optional[float] = None
+    closest_norm: Optional[float] = None

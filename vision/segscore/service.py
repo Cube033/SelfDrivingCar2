@@ -12,6 +12,11 @@ from vision.segscore.snapshot import SnapshotWriter
 class SegScoreServiceConfig:
     snapshot_dir: str = "logs/vision"
     snapshot_enabled: bool = True
+    snapshot_images: bool = True
+    snapshot_image_w: int = 320
+    snapshot_image_h: int = 240
+    snapshot_on_stop: bool = True
+    snapshot_on_turn: bool = False
 
     # OLED grid
     grid_w: int = 32
@@ -41,6 +46,8 @@ class SegScoreService:
             grid_w=self.cfg.grid_w,
             grid_h=self.cfg.grid_h,
             occ_threshold=self.cfg.occ_threshold,
+            snapshot_images=self.cfg.snapshot_images,
+            snapshot_size=(self.cfg.snapshot_image_w, self.cfg.snapshot_image_h),
         )
 
         self.snap = SnapshotWriter(self.cfg.snapshot_dir) if self.cfg.snapshot_enabled else None
@@ -76,14 +83,26 @@ class SegScoreService:
 
         if self._last_stop is None:
             self._last_stop = stop
-            if self.snap:
-                self.snap.write(f"{event_prefix}_init", st)
+            if self.snap and self.cfg.snapshot_on_stop:
+                img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
+                self.snap.write(f"{event_prefix}_init", st, image=img)
             return stop
 
         if stop != self._last_stop:
             self._last_stop = stop
-            if self.snap:
-                self.snap.write(f"{event_prefix}_change", st)
+            if self.snap and self.cfg.snapshot_on_stop:
+                img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
+                self.snap.write(f"{event_prefix}_change", st, image=img)
             return stop
 
         return None
+
+    def snapshot_event(self, event: str, state=None, **extra):
+        if not self.snap:
+            return
+        if state is None:
+            state = self.get()
+        if state is None:
+            return
+        img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
+        self.snap.write(event, state, image=img, **extra)

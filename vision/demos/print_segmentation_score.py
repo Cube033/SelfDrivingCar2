@@ -48,7 +48,10 @@ def main():
                     f"fps={st.fps:5.1f}  "
                     f"dominant={st.dominant}({st.dominant_ratio:.2f})  "
                     f"top3={st.top3}  "
-                    f"FREE={st.free_ratio:.2f}  EMA={st.ema_free:.2f}  STOP={st.is_stopped}"
+                    f"FREE={st.free_ratio:.2f}  W_FREE={st.weighted_free:.2f}  "
+                    f"CLOSE={st.closest_norm:.2f}  "
+                    f"OCC L/C/R={st.occ_left:.2f}/{st.occ_center:.2f}/{st.occ_right:.2f}  "
+                    f"EMA={st.ema_free:.2f}  STOP={st.is_stopped}"
                 )
                 print(line, flush=True)
 

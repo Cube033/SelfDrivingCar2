@@ -42,6 +42,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--hard-stop-class", type=int, default=None)
     p.add_argument("--hard-stop-ratio", type=float, default=0.05)
+    p.add_argument("--weight-power", type=float, default=2.0)
+    p.add_argument("--closest-stop", type=float, default=0.82)
+    p.add_argument("--closest-go", type=float, default=0.70)
 
     return p
 
@@ -58,6 +61,9 @@ def parse_config(argv=None) -> AppConfig:
         min_go_frames=args.min_go_frames,
         hard_stop_class=args.hard_stop_class,
         hard_stop_ratio=args.hard_stop_ratio,
+        weight_power=args.weight_power,
+        closest_stop=args.closest_stop,
+        closest_go=args.closest_go,
     )
 
     return AppConfig(

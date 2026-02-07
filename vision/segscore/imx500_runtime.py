@@ -29,6 +29,7 @@ class FrameStats:
     weighted_occ: float
     closest_row: int
     closest_norm: float
+    closest_any_norm: float
     occ_left: float
     occ_center: float
     occ_right: float
@@ -106,6 +107,7 @@ class Imx500SegScoreRunner:
         occ_threshold: float = 0.20,
         snapshot_images: bool = False,
         snapshot_size: Tuple[int, int] = (320, 240),
+        snapshot_max_fps: float = 5.0,
     ):
         self.model_path = model_path
         self.roi_w = roi_w
@@ -119,6 +121,7 @@ class Imx500SegScoreRunner:
         self.occ_threshold = float(occ_threshold)
         self.snapshot_images = bool(snapshot_images)
         self.snapshot_size = (int(snapshot_size[0]), int(snapshot_size[1]))
+        self.snapshot_max_fps = float(snapshot_max_fps)
 
         self._imx500: Optional[IMX500] = None
         self._picam2: Optional[Picamera2] = None
@@ -131,6 +134,8 @@ class Imx500SegScoreRunner:
         self._latest: Optional[FrameStats] = None
         self._last_img: Optional[Image.Image] = None
         self._last_img_frame: int = -1
+        self._last_img_ts: float = 0.0
+        self._snapshot_request: bool = False
 
     def start(self):
         # 1) IMX500 must be created before Picamera2
@@ -214,6 +219,7 @@ class Imx500SegScoreRunner:
                 weighted_occ=float(getattr(prox, "weighted_occ", 0.0)),
                 closest_row=int(getattr(prox, "closest_row", -1)),
                 closest_norm=float(getattr(prox, "closest_norm", 0.0)),
+                closest_any_norm=float(getattr(prox, "closest_any_norm", 0.0)),
                 occ_left=float(getattr(prox, "occ_left", 0.0)),
                 occ_center=float(getattr(prox, "occ_center", 0.0)),
                 occ_right=float(getattr(prox, "occ_right", 0.0)),
@@ -228,11 +234,15 @@ class Imx500SegScoreRunner:
             # capture snapshot image (small) if enabled
             if self.snapshot_images:
                 try:
-                    img = request.make_image("main")
-                    if img is not None and hasattr(img, "resize"):
-                        img = img.resize(self.snapshot_size, Image.BILINEAR)
-                        self._last_img = img
-                        self._last_img_frame = frame
+                    min_dt = 0.0 if self._snapshot_request else (1.0 / max(1e-6, self.snapshot_max_fps))
+                    if (time.time() - self._last_img_ts) >= min_dt or self._snapshot_request:
+                        img = request.make_image("main")
+                        if img is not None and hasattr(img, "resize"):
+                            img = img.resize(self.snapshot_size, Image.BILINEAR)
+                            self._last_img = img
+                            self._last_img_frame = frame
+                            self._last_img_ts = time.time()
+                        self._snapshot_request = False
                 except Exception:
                     pass
 
@@ -248,3 +258,9 @@ class Imx500SegScoreRunner:
 
     def get_snapshot_image(self) -> Optional[Image.Image]:
         return self._last_img
+
+    def get_snapshot_frame(self) -> int:
+        return self._last_img_frame
+
+    def request_snapshot(self) -> None:
+        self._snapshot_request = True

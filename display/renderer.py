@@ -65,16 +65,16 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     arm_txt = "ARM" if state.armed else "DIS"
     stop_txt = "STOP" if state.is_stop else "GO"
 
-    # big mode
-    draw.text((cfg.split_x + 10, 6), mode, font=font, fill=fg)
+    # big mode (right side)
+    draw.text((cfg.split_x + 44, 2), mode, font=font, fill=fg)
 
     # occupancy bars (L/C/R)
     if state.occ_left is not None and state.occ_center is not None and state.occ_right is not None:
-        bar_x0 = cfg.split_x + 6
-        bar_y0 = 18
+        bar_x0 = cfg.split_x + 2
+        bar_y0 = 2
         bar_h = 20
         bar_w = 8
-        gap = 6
+        gap = 4
 
         vals = [state.occ_left, state.occ_center, state.occ_right]
         for i, v in enumerate(vals):
@@ -91,7 +91,7 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
         draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
 
     # status
-    draw.text((cfg.split_x + 2, 44), f"{arm_txt} {stop_txt}", font=font, fill=fg)
+    draw.text((cfg.split_x + 2, 38), f"{arm_txt} {stop_txt}", font=font, fill=fg)
 
     parts = []
     if state.free_ratio is not None:
@@ -101,6 +101,6 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     if state.fps is not None:
         parts.append(f"{state.fps:.1f}fps")
     if parts:
-        draw.text((cfg.split_x + 2, 54), " ".join(parts), font=font, fill=fg)
+        draw.text((cfg.split_x + 2, 50), " ".join(parts), font=font, fill=fg)
 
     return img

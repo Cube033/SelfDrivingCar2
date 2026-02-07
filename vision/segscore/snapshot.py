@@ -99,6 +99,7 @@ class SnapshotWriter:
                 "weighted_free",
                 "weighted_occ",
                 "closest_norm",
+                "closest_any_norm",
                 "occ_left",
                 "occ_center",
                 "occ_right",

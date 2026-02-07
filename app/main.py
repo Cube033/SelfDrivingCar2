@@ -176,6 +176,7 @@ def main():
             snapshot_images=getattr(config, "SNAPSHOT_IMAGES", True),
             snapshot_image_w=getattr(config, "SNAPSHOT_IMAGE_W", 320),
             snapshot_image_h=getattr(config, "SNAPSHOT_IMAGE_H", 240),
+            snapshot_image_max_fps=getattr(config, "SNAPSHOT_IMAGE_MAX_FPS", 5.0),
             snapshot_on_stop=getattr(config, "SNAPSHOT_ON_STOP_DECISION", True),
             snapshot_on_turn=getattr(config, "SNAPSHOT_ON_TURN_DECISION", False),
         )
@@ -333,7 +334,10 @@ def main():
                 logger.write("vision_runtime_error", err=str(e))
                 st = None
 
-            is_stop = bool(st.is_stopped) if st is not None else True
+            if st is None:
+                is_stop = bool(last_stop) if last_stop is not None else True
+            else:
+                is_stop = bool(st.is_stopped)
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
 

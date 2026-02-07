@@ -76,6 +76,7 @@ class ProximityStats:
     weighted_occ: float
     closest_row: int
     closest_norm: float
+    closest_any_norm: float
     occ_left: float
     occ_center: float
     occ_right: float
@@ -137,6 +138,7 @@ class StopDecider:
             weighted_occ = 0.0
             closest_row = -1
             closest_norm = 0.0
+            closest_any_norm = 0.0
             occ_left = 0.0
             occ_center = 0.0
             occ_right = 0.0
@@ -148,13 +150,24 @@ class StopDecider:
             weighted_occ = _weighted_occ(obs, weights)
             weighted_free = 1.0 - weighted_occ
 
-            rows_with_obs = np.where(obs.any(axis=1))[0]
-            if rows_with_obs.size > 0:
-                closest_row = int(rows_with_obs.max())
+            # closest obstacle in center band (for stop decision)
+            x0 = w // 3
+            x1 = (w * 2) // 3
+            obs_center = obs[:, x0:x1] if w >= 3 else obs
+            rows_center = np.where(obs_center.any(axis=1))[0]
+            if rows_center.size > 0:
+                closest_row = int(rows_center.max())
                 closest_norm = float((closest_row + 1) / max(1, h))
             else:
                 closest_row = -1
                 closest_norm = 0.0
+
+            # closest obstacle anywhere (debug)
+            rows_any = np.where(obs.any(axis=1))[0]
+            if rows_any.size > 0:
+                closest_any_norm = float((int(rows_any.max()) + 1) / max(1, h))
+            else:
+                closest_any_norm = 0.0
 
             occ_left, occ_center, occ_right = _zone_occ(obs, weights)
 
@@ -181,6 +194,7 @@ class StopDecider:
                     weighted_occ=weighted_occ,
                     closest_row=closest_row,
                     closest_norm=closest_norm,
+                    closest_any_norm=closest_any_norm,
                     occ_left=occ_left,
                     occ_center=occ_center,
                     occ_right=occ_right,
@@ -211,6 +225,7 @@ class StopDecider:
             weighted_occ=weighted_occ,
             closest_row=closest_row,
             closest_norm=closest_norm,
+            closest_any_norm=closest_any_norm,
             occ_left=occ_left,
             occ_center=occ_center,
             occ_right=occ_right,

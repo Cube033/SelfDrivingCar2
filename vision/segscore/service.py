@@ -15,6 +15,7 @@ class SegScoreServiceConfig:
     snapshot_images: bool = True
     snapshot_image_w: int = 320
     snapshot_image_h: int = 240
+    snapshot_image_max_fps: float = 5.0
     snapshot_on_stop: bool = True
     snapshot_on_turn: bool = False
 
@@ -48,6 +49,7 @@ class SegScoreService:
             occ_threshold=self.cfg.occ_threshold,
             snapshot_images=self.cfg.snapshot_images,
             snapshot_size=(self.cfg.snapshot_image_w, self.cfg.snapshot_image_h),
+            snapshot_max_fps=self.cfg.snapshot_image_max_fps,
         )
 
         self.snap = SnapshotWriter(self.cfg.snapshot_dir) if self.cfg.snapshot_enabled else None
@@ -84,15 +86,29 @@ class SegScoreService:
         if self._last_stop is None:
             self._last_stop = stop
             if self.snap and self.cfg.snapshot_on_stop:
+                if self.cfg.snapshot_images:
+                    self.runner.request_snapshot()
                 img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
-                self.snap.write(f"{event_prefix}_init", st, image=img)
+                self.snap.write(
+                    f"{event_prefix}_init",
+                    st,
+                    image=img,
+                    image_frame=self.runner.get_snapshot_frame(),
+                )
             return stop
 
         if stop != self._last_stop:
             self._last_stop = stop
             if self.snap and self.cfg.snapshot_on_stop:
+                if self.cfg.snapshot_images:
+                    self.runner.request_snapshot()
                 img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
-                self.snap.write(f"{event_prefix}_change", st, image=img)
+                self.snap.write(
+                    f"{event_prefix}_change",
+                    st,
+                    image=img,
+                    image_frame=self.runner.get_snapshot_frame(),
+                )
             return stop
 
         return None
@@ -104,5 +120,13 @@ class SegScoreService:
             state = self.get()
         if state is None:
             return
+        if self.cfg.snapshot_images:
+            self.runner.request_snapshot()
         img = self.runner.get_snapshot_image() if self.cfg.snapshot_images else None
-        self.snap.write(event, state, image=img, **extra)
+        self.snap.write(
+            event,
+            state,
+            image=img,
+            image_frame=self.runner.get_snapshot_frame(),
+            **extra,
+        )

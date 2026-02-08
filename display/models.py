@@ -25,3 +25,6 @@ class DisplayState:
     occ_center: Optional[float] = None
     occ_right: Optional[float] = None
     closest_norm: Optional[float] = None
+
+    # optional message (e.g., startup/shutdown)
+    message: Optional[str] = None

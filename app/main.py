@@ -210,6 +210,14 @@ def main():
         display_ok = True
         logger.write("display_started")
         print("[SYSTEM] Display started")
+        display.update(
+            DisplayState(
+                mode_big=_mode_to_big_label(ap.mode),
+                armed=arm.armed,
+                is_stop=True,
+                message="RC CAR\nREADY",
+            )
+        )
     except Exception as e:
         logger.write("display_failed", err=str(e))
         print("[WARN] Display start failed:", e)
@@ -313,6 +321,15 @@ def main():
                     shutdown_requested = True
                     logger.write("shutdown_requested", source="gamepad")
                     request_stop("shutdown_requested")
+                    if display_ok and display:
+                        display.update(
+                            DisplayState(
+                                mode_big=_mode_to_big_label(ap.mode),
+                                armed=arm.armed,
+                                is_stop=is_stop,
+                                message="SHUTDOWN",
+                            )
+                        )
                     _trigger_shutdown("RC Car shutdown")
 
             # -----------------------
@@ -402,25 +419,25 @@ def main():
                     turn_changed = True
 
             # -----------------------
-            # Display update (vision + mode + armed)
+            # Display update (always, even if vision is unavailable)
             # -----------------------
-            if display_ok and display and st is not None:
+            if display_ok and display:
                 try:
                     mode_big = _mode_to_big_label(ap.mode)
                     display.update(
                         DisplayState(
-                            grid_occ=getattr(st, "grid_occ", None),
-                            grid_w=getattr(st, "grid_w", 32),
-                            grid_h=getattr(st, "grid_h", 32),
+                            grid_occ=getattr(st, "grid_occ", None) if st is not None else None,
+                            grid_w=getattr(st, "grid_w", 32) if st is not None else 32,
+                            grid_h=getattr(st, "grid_h", 32) if st is not None else 32,
                             mode_big=mode_big,
                             armed=arm.armed,
                             is_stop=is_stop,
-                            free_ratio=free,
-                            occ_left=getattr(st, "occ_left", None),
-                            occ_center=getattr(st, "occ_center", None),
-                            occ_right=getattr(st, "occ_right", None),
-                            closest_norm=getattr(st, "closest_norm", None),
-                            fps=float(getattr(st, "fps", 0.0)) if getattr(st, "fps", None) is not None else None,
+                            free_ratio=free if st is not None else None,
+                            occ_left=getattr(st, "occ_left", None) if st is not None else None,
+                            occ_center=getattr(st, "occ_center", None) if st is not None else None,
+                            occ_right=getattr(st, "occ_right", None) if st is not None else None,
+                            closest_norm=getattr(st, "closest_norm", None) if st is not None else None,
+                            fps=float(getattr(st, "fps", 0.0)) if st is not None and getattr(st, "fps", None) is not None else None,
                         )
                     )
                 except Exception as e:

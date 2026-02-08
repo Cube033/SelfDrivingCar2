@@ -90,17 +90,24 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
                 draw.rectangle([x0 + 1, y0, x1 - 1, y1 - 1], fill=fg)
         draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
 
-    # status
-    draw.text((cfg.split_x + 2, 38), f"{arm_txt} {stop_txt}", font=font, fill=fg)
+    # message or status
+    if state.message:
+        lines = [s for s in state.message.split("\n") if s][:3]
+        y = 28
+        for line in lines:
+            draw.text((cfg.split_x + 2, y), line[:9], font=font, fill=fg)
+            y += 10
+    else:
+        draw.text((cfg.split_x + 2, 38), f"{arm_txt} {stop_txt}", font=font, fill=fg)
 
-    parts = []
-    if state.free_ratio is not None:
-        parts.append(f"F:{state.free_ratio:.2f}")
-    if state.closest_norm is not None:
-        parts.append(f"C:{state.closest_norm:.2f}")
-    if state.fps is not None:
-        parts.append(f"{state.fps:.1f}fps")
-    if parts:
-        draw.text((cfg.split_x + 2, 50), " ".join(parts), font=font, fill=fg)
+        parts = []
+        if state.free_ratio is not None:
+            parts.append(f"F:{state.free_ratio:.2f}")
+        if state.closest_norm is not None:
+            parts.append(f"C:{state.closest_norm:.2f}")
+        if state.fps is not None:
+            parts.append(f"{state.fps:.1f}fps")
+        if parts:
+            draw.text((cfg.split_x + 2, 50), " ".join(parts), font=font, fill=fg)
 
     return img

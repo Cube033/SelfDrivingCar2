@@ -58,7 +58,10 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
                     y1 = min(y + cell - 1, max_y)
                     draw.rectangle([x, y, x1, y1], fill=fg)
     else:
-        draw.text((2, 2), "NO GRID", font=font, fill=fg)
+        left_msg = "NO GRID"
+        if state.message and "VISION" in state.message.upper():
+            left_msg = "NO VISION"
+        draw.text((2, 2), left_msg, font=font, fill=fg)
 
     # --- right panel
     mode = (state.mode_big or "?")[:2].upper()

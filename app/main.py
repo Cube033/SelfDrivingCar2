@@ -190,12 +190,14 @@ def main():
         )
     )
     vision_ok = False
+    last_vision_error = None
     try:
         vision.start()
         vision_ok = True
         logger.write("vision_started")
         print("[SYSTEM] Vision runner started")
     except Exception as e:
+        last_vision_error = str(e)
         logger.write("vision_failed", err=str(e), tb=traceback.format_exc()[-2000:])
         print("[WARN] Vision start failed:", e)
 
@@ -371,6 +373,7 @@ def main():
                 if vision_ok:
                     vision.maybe_snapshot_on_change(event_prefix="stopgo")
             except Exception as e:
+                last_vision_error = str(e)
                 logger.write("vision_runtime_error", err=str(e))
                 st = None
 
@@ -424,6 +427,9 @@ def main():
             if display_ok and display:
                 try:
                     mode_big = _mode_to_big_label(ap.mode)
+                    msg = None
+                    if not vision_ok or st is None:
+                        msg = "VISION\nERROR"
                     display.update(
                         DisplayState(
                             grid_occ=getattr(st, "grid_occ", None) if st is not None else None,
@@ -438,6 +444,7 @@ def main():
                             occ_right=getattr(st, "occ_right", None) if st is not None else None,
                             closest_norm=getattr(st, "closest_norm", None) if st is not None else None,
                             fps=float(getattr(st, "fps", 0.0)) if st is not None and getattr(st, "fps", None) is not None else None,
+                            message=msg,
                         )
                     )
                 except Exception as e:

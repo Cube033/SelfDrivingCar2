@@ -146,13 +146,14 @@ class StopDecider:
             free = float(np.mean(roi_map == cfg.bg_class))
             obs = (roi_map != cfg.bg_class).astype(np.uint8)
             h = int(obs.shape[0])
+            w = int(obs.shape[1]) if obs.ndim > 1 else 0
             weights = _row_weights(h, cfg.weight_power)
             weighted_occ = _weighted_occ(obs, weights)
             weighted_free = 1.0 - weighted_occ
 
             # closest obstacle in center band (for stop decision)
-            x0 = w // 3
-            x1 = (w * 2) // 3
+            x0 = w // 3 if w > 0 else 0
+            x1 = (w * 2) // 3 if w > 0 else 0
             obs_center = obs[:, x0:x1] if w >= 3 else obs
             rows_center = np.where(obs_center.any(axis=1))[0]
             if rows_center.size > 0:

@@ -173,6 +173,18 @@ def main():
         print("[SYSTEM] Gamepad disabled in config")
 
     # -----------------------
+    # Autopilot config
+    # -----------------------
+    ap = Autopilot(
+        AutoCruiseConfig(
+            speed_default=getattr(config, "AUTO_CRUISE_SPEED_DEFAULT", 0.15),
+            speed_min=getattr(config, "AUTO_CRUISE_SPEED_MIN", 0.05),
+            speed_max=getattr(config, "AUTO_CRUISE_SPEED_MAX", 0.35),
+            speed_step=getattr(config, "AUTO_CRUISE_SPEED_STEP", 0.02),
+        )
+    )
+
+    # -----------------------
     # Vision (IMX500 seg score)
     # -----------------------
     log_root = getattr(config, "LOG_DIR", "logs")
@@ -223,18 +235,6 @@ def main():
     except Exception as e:
         logger.write("display_failed", err=str(e))
         print("[WARN] Display start failed:", e)
-
-    # -----------------------
-    # Autopilot config
-    # -----------------------
-    ap = Autopilot(
-        AutoCruiseConfig(
-            speed_default=getattr(config, "AUTO_CRUISE_SPEED_DEFAULT", 0.15),
-            speed_min=getattr(config, "AUTO_CRUISE_SPEED_MIN", 0.05),
-            speed_max=getattr(config, "AUTO_CRUISE_SPEED_MAX", 0.35),
-            speed_step=getattr(config, "AUTO_CRUISE_SPEED_STEP", 0.02),
-        )
-    )
 
     logger.write("main_loop_start", mode=ap.mode, cruise_speed=ap.cruise_speed, vision_ok=vision_ok)
     print("[SYSTEM] Main loop started")

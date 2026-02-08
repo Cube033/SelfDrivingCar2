@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import signal
+import subprocess
 import traceback
 
 import config
@@ -59,6 +60,13 @@ def _mode_to_big_label(ap_mode: str) -> str:
     if len(ap_mode or "") == 0:
         return "?"
     return (ap_mode[:2]).upper()
+
+
+def _trigger_shutdown(reason: str):
+    try:
+        subprocess.Popen(["/sbin/shutdown", "-h", "now", reason])
+    except Exception as e:
+        print("[WARN] Failed to trigger shutdown:", e)
 
 
 def main():
@@ -227,6 +235,7 @@ def main():
     last_debug = 0.0
     last_loop_time = time.time()
     auto_turn_steer = 0.0
+    shutdown_requested = False
 
     last_manual_activity = time.time()
     MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)
@@ -271,7 +280,15 @@ def main():
             # -----------------------
             if gamepad_iter:
                 try:
-                    ls, rs, gp_throttle, gp_arm_event, mode_event, cruise_delta = next(gamepad_iter)
+                    (
+                        ls,
+                        rs,
+                        gp_throttle,
+                        gp_arm_event,
+                        mode_event,
+                        cruise_delta,
+                        shutdown_event,
+                    ) = next(gamepad_iter)
                 except StopIteration:
                     logger.write("gamepad_input_stopped")
                     print("[WARN] Gamepad input stopped (device lost)")
@@ -291,6 +308,12 @@ def main():
                 elif gp_arm_event == "disarm":
                     arm.disarm()
                     logger.write("disarm", source="gamepad")
+
+                if shutdown_event and not shutdown_requested:
+                    shutdown_requested = True
+                    logger.write("shutdown_requested", source="gamepad")
+                    request_stop("shutdown_requested")
+                    _trigger_shutdown("RC Car shutdown")
 
             # -----------------------
             # Keyboard (optional)

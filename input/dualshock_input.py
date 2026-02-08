@@ -42,6 +42,7 @@ class DualShockInput:
             arm_event = None
             mode_event = None
             cruise_delta = 0
+            shutdown_event = False
 
             try:
                 r, _, _ = select([self.dev], [], [], 0.02)
@@ -97,6 +98,10 @@ class DualShockInput:
                                     cruise_delta = +1
                                 elif hasattr(ecodes, "BTN_DPAD_DOWN") and event.code == ecodes.BTN_DPAD_DOWN:
                                     cruise_delta = -1
+                                # Share → safe shutdown
+                                elif event.code == ecodes.BTN_SELECT:
+                                    shutdown_event = True
+                                    print("[SYSTEM] Shutdown requested (gamepad)")
 
             except OSError as e:
                 print(f"[WARN] Gamepad disconnected: {e}")
@@ -112,4 +117,5 @@ class DualShockInput:
                 arm_event,
                 mode_event,
                 cruise_delta,
+                shutdown_event,
             )

@@ -3,6 +3,8 @@ import sys
 import time
 import signal
 import subprocess
+import math
+from collections import deque
 import traceback
 
 import config
@@ -18,6 +20,7 @@ from control.arm_controller import ArmController
 from input.keyboard_input import KeyboardSteeringInput
 from input.keyboard_throttle_input import KeyboardThrottleInput
 from input.dualshock_input import DualShockInput
+from input.arduino_ultrasonic import UltrasonicSerialReader
 
 from app.autopilot import Autopilot, AutoCruiseConfig, DriveMode
 from app.event_logger import EventLogger
@@ -26,6 +29,7 @@ from vision.segscore.service import SegScoreService, SegScoreServiceConfig
 
 # DISPLAY
 from display import DisplayService, DisplayState, DisplayConfig
+from control.ultrasonic import UltrasonicFilter
 
 
 def gamepad_available(device_path: str) -> bool:
@@ -236,6 +240,61 @@ def main():
         logger.write("display_failed", err=str(e))
         print("[WARN] Display start failed:", e)
 
+    # -----------------------
+    # Ultrasonic (Arduino over USB serial)
+    # -----------------------
+    us_reader = None
+    us_filter = UltrasonicFilter(
+        stop_cm=getattr(config, "US_STOP_CM", 35.0),
+        go_cm=getattr(config, "US_GO_CM", 45.0),
+        ema_alpha=getattr(config, "US_EMA_ALPHA", 0.3),
+        min_cm=getattr(config, "US_MIN_CM", 2.0),
+        max_cm=getattr(config, "US_MAX_CM", 400.0),
+        stale_sec=getattr(config, "US_STALE_SEC", 0.5),
+    )
+    if getattr(config, "US_ENABLED", True):
+        try:
+            us_reader = UltrasonicSerialReader(
+                port=getattr(config, "US_SERIAL_PORT", "/dev/ttyACM0"),
+                baud=getattr(config, "US_BAUD", 115200),
+            )
+            logger.write("ultrasonic_ok")
+            print("[SYSTEM] Ultrasonic serial connected")
+        except Exception as e:
+            logger.write("ultrasonic_fail", err=str(e))
+            print("[WARN] Ultrasonic serial failed:", e)
+
+    # -----------------------
+    # Camera history (FIFO) for turn decision
+    # -----------------------
+    cam_hist = deque()
+    cam_hist_max = float(getattr(config, "CAM_HISTORY_MAX_SEC", 3.0))
+    cam_hist_tau = float(getattr(config, "CAM_HISTORY_TAU_SEC", 1.0))
+    cam_hist_min_w = float(getattr(config, "CAM_HISTORY_MIN_WEIGHT", 0.5))
+
+    def _cam_hist_push(ts: float, left: float, center: float, right: float):
+        cam_hist.append((ts, left, center, right))
+        # drop old
+        cutoff = ts - cam_hist_max
+        while cam_hist and cam_hist[0][0] < cutoff:
+            cam_hist.popleft()
+
+    def _cam_hist_weighted(ts: float):
+        if not cam_hist:
+            return None, 0.0
+        wl = wc = wr = 0.0
+        wsum = 0.0
+        for t, l, c, r in cam_hist:
+            age = max(0.0, ts - t)
+            w = math.exp(-age / max(1e-6, cam_hist_tau))
+            wl += l * w
+            wc += c * w
+            wr += r * w
+            wsum += w
+        if wsum <= 1e-6:
+            return None, 0.0
+        return (wl / wsum, wc / wsum, wr / wsum), wsum
+
     logger.write("main_loop_start", mode=ap.mode, cruise_speed=ap.cruise_speed, vision_ok=vision_ok)
     print("[SYSTEM] Main loop started")
 
@@ -262,6 +321,16 @@ def main():
             cruise_delta = 0
             turn_decision = "none"
             turn_changed = False
+            turn_occ_left = None
+            turn_occ_center = None
+            turn_occ_right = None
+
+            # -----------------------
+            # Ultrasonic read (Arduino)
+            # -----------------------
+            raw_cm = us_reader.read_cm() if us_reader else None
+            us_state = us_filter.update(raw_cm, ts=now)
+            us_stop = True if us_reader is None else (not us_state.is_valid or us_state.is_stop)
 
             # -----------------------
             # Gamepad hot-plug
@@ -378,9 +447,12 @@ def main():
                 st = None
 
             if st is None:
-                is_stop = bool(last_stop) if last_stop is not None else True
+                vision_stop = bool(last_stop) if last_stop is not None else True
             else:
-                is_stop = bool(st.is_stopped)
+                vision_stop = bool(st.is_stopped)
+
+            # forward motion is governed by ultrasonic (AUTO only)
+            is_stop = us_stop if us_reader is not None else vision_stop
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
 
@@ -398,15 +470,24 @@ def main():
                 last_stop = is_stop
 
             # -----------------------
-            # Turn decision (for snapshots / future avoidance)
+            # Turn decision (camera, with FIFO history)
             # -----------------------
+            center_thresh = getattr(config, "TURN_CENTER_THRESHOLD", 0.35)
+            diff_thresh = getattr(config, "TURN_DIFF_THRESHOLD", 0.08)
+
+            occ_left = occ_center = occ_right = None
             if st is not None:
                 occ_left = float(getattr(st, "occ_left", 0.0))
                 occ_center = float(getattr(st, "occ_center", 0.0))
                 occ_right = float(getattr(st, "occ_right", 0.0))
-                center_thresh = getattr(config, "TURN_CENTER_THRESHOLD", 0.35)
-                diff_thresh = getattr(config, "TURN_DIFF_THRESHOLD", 0.08)
+                _cam_hist_push(now, occ_left, occ_center, occ_right)
+            else:
+                hist_vals, hist_w = _cam_hist_weighted(now)
+                if hist_vals is not None and hist_w >= cam_hist_min_w:
+                    occ_left, occ_center, occ_right = hist_vals
 
+            if occ_left is not None and occ_center is not None and occ_right is not None:
+                turn_occ_left, turn_occ_center, turn_occ_right = occ_left, occ_center, occ_right
                 if occ_center >= float(center_thresh):
                     if (occ_left + diff_thresh) < occ_right:
                         turn_decision = "left"
@@ -445,6 +526,7 @@ def main():
                             closest_norm=getattr(st, "closest_norm", None) if st is not None else None,
                             fps=float(getattr(st, "fps", 0.0)) if st is not None and getattr(st, "fps", None) is not None else None,
                             message=msg,
+                            distance_cm=us_state.filtered_cm if us_state.is_valid else None,
                         )
                     )
                 except Exception as e:
@@ -465,6 +547,13 @@ def main():
                 stop=is_stop,
                 armed=arm.armed,
             )
+
+            # -----------------------
+            # Forward motion gated by ultrasonic (AUTO only)
+            # -----------------------
+            if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0:
+                if us_stop:
+                    final_throttle = 0.0
 
             # -----------------------
             # Auto speed scaling (turning / obstacles)
@@ -527,13 +616,13 @@ def main():
             # -----------------------
             # Turn decision snapshot (after final steer)
             # -----------------------
-            if turn_changed and getattr(config, "SNAPSHOT_ON_TURN_DECISION", False) and st is not None:
+            if turn_changed and getattr(config, "SNAPSHOT_ON_TURN_DECISION", False):
                 vision.snapshot_event(
                     f"turn_{turn_decision}",
                     st,
-                    occ_left=float(getattr(st, "occ_left", 0.0)),
-                    occ_center=float(getattr(st, "occ_center", 0.0)),
-                    occ_right=float(getattr(st, "occ_right", 0.0)),
+                    occ_left=float(turn_occ_left) if turn_occ_left is not None else None,
+                    occ_center=float(turn_occ_center) if turn_occ_center is not None else None,
+                    occ_right=float(turn_occ_right) if turn_occ_right is not None else None,
                     steer_applied=float(steer),
                     throttle_final=float(final_throttle),
                 )

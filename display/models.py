@@ -19,6 +19,7 @@ class DisplayState:
     # optional small stats
     free_ratio: Optional[float] = None
     fps: Optional[float] = None
+    distance_cm: Optional[float] = None
 
     # occupancy (weighted) for left/center/right
     occ_left: Optional[float] = None

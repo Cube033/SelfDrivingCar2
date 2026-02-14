@@ -62,3 +62,19 @@ SNAPSHOT_ON_TURN_DECISION = False
 # ===== Turn decision =====
 TURN_CENTER_THRESHOLD = 0.35
 TURN_DIFF_THRESHOLD = 0.08
+
+# ===== Ultrasonic (Arduino) =====
+US_ENABLED = True
+US_SERIAL_PORT = "/dev/ttyACM0"
+US_BAUD = 115200
+US_STOP_CM = 35.0
+US_GO_CM = 45.0
+US_EMA_ALPHA = 0.3
+US_MIN_CM = 2.0
+US_MAX_CM = 400.0
+US_STALE_SEC = 0.5
+
+# ===== Camera history (for turn decision) =====
+CAM_HISTORY_MAX_SEC = 3.0
+CAM_HISTORY_TAU_SEC = 1.0
+CAM_HISTORY_MIN_WEIGHT = 0.5

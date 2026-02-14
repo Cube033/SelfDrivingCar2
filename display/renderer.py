@@ -108,6 +108,8 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
             parts.append(f"F:{state.free_ratio:.2f}")
         if state.closest_norm is not None:
             parts.append(f"C:{state.closest_norm:.2f}")
+        if state.distance_cm is not None:
+            parts.append(f"D:{state.distance_cm:.0f}cm")
         if state.fps is not None:
             parts.append(f"{state.fps:.1f}fps")
         if parts:

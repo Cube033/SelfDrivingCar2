@@ -72,7 +72,8 @@ US_GO_CM = 55.0                    # resume if >= this (cm)
 US_EMA_ALPHA = 0.15                # smoothing factor (lower = smoother)
 US_MIN_CM = 2.0                    # ignore closer than this
 US_MAX_CM = 400.0                  # ignore farther than this
-US_STALE_SEC = 0.7                 # data staleness timeout (sec)
+US_STALE_SEC = 1.2                 # data staleness timeout (sec)
+US_DISPLAY_HOLD_SEC = 1.0          # keep last distance on display (sec)
 
 # ===== Version =====
 APP_VERSION = "0.5.1"              # app version for logs/release notes

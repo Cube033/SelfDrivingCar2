@@ -306,6 +306,8 @@ def main():
     last_loop_time = time.time()
     auto_turn_steer = 0.0
     shutdown_requested = False
+    last_us_display_cm = None
+    last_us_display_ts = 0.0
 
     last_manual_activity = time.time()
     MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)
@@ -331,6 +333,9 @@ def main():
             # -----------------------
             raw_cm = us_reader.read_cm() if us_reader else None
             us_state = us_filter.update(raw_cm, ts=now)
+            if us_state.is_valid and us_state.filtered_cm is not None:
+                last_us_display_cm = us_state.filtered_cm
+                last_us_display_ts = now
             # If ultrasonic invalid, fall back to vision for forward stop
             us_stop = None if us_reader is None else (us_state.is_stop if us_state.is_valid else None)
 
@@ -513,6 +518,13 @@ def main():
                     msg = None
                     if not vision_ok or st is None:
                         msg = "VISION\nERROR"
+                    hold_sec = float(getattr(config, "US_DISPLAY_HOLD_SEC", 1.0))
+                    display_cm = None
+                    if last_us_display_cm is not None and (now - last_us_display_ts) <= hold_sec:
+                        display_cm = last_us_display_cm
+                    elif us_state.is_valid:
+                        display_cm = us_state.filtered_cm
+
                     display.update(
                         DisplayState(
                             grid_occ=getattr(st, "grid_occ", None) if st is not None else None,
@@ -528,7 +540,7 @@ def main():
                             closest_norm=getattr(st, "closest_norm", None) if st is not None else None,
                             fps=float(getattr(st, "fps", 0.0)) if st is not None and getattr(st, "fps", None) is not None else None,
                             message=msg,
-                            distance_cm=us_state.filtered_cm if us_state.is_valid else None,
+                            distance_cm=display_cm,
                         )
                     )
                 except Exception as e:

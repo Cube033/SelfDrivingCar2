@@ -74,6 +74,7 @@ US_MIN_CM = 2.0                    # ignore closer than this
 US_MAX_CM = 400.0                  # ignore farther than this
 US_STALE_SEC = 1.2                 # data staleness timeout (sec)
 US_DISPLAY_HOLD_SEC = 1.0          # keep last distance on display (sec)
+US_CONTROL_HOLD_SEC = 0.5          # keep last valid distance for control (sec)
 
 # ===== Version =====
 APP_VERSION = "0.5.1"              # app version for logs/release notes

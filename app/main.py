@@ -308,6 +308,8 @@ def main():
     shutdown_requested = False
     last_us_display_cm = None
     last_us_display_ts = 0.0
+    last_us_control_cm = None
+    last_us_control_ts = 0.0
 
     last_manual_activity = time.time()
     MANUAL_ACTIVITY_TIMEOUT = getattr(config, "MANUAL_ACTIVITY_TIMEOUT", 999999.0)
@@ -336,8 +338,22 @@ def main():
             if us_state.is_valid and us_state.filtered_cm is not None:
                 last_us_display_cm = us_state.filtered_cm
                 last_us_display_ts = now
+                last_us_control_cm = us_state.filtered_cm
+                last_us_control_ts = now
             # If ultrasonic invalid, fall back to vision for forward stop
-            us_stop = None if us_reader is None else (us_state.is_stop if us_state.is_valid else None)
+            us_control_hold = float(getattr(config, "US_CONTROL_HOLD_SEC", 0.5))
+            if us_reader is None:
+                us_stop = None
+                us_source = "vision"
+            elif us_state.is_valid:
+                us_stop = us_state.is_stop
+                us_source = "ultrasonic"
+            elif last_us_control_cm is not None and (now - last_us_control_ts) <= us_control_hold:
+                us_stop = us_filter.update(last_us_control_cm, ts=now).is_stop
+                us_source = "ultra_hold"
+            else:
+                us_stop = None
+                us_source = "vision"
 
             # -----------------------
             # Gamepad hot-plug
@@ -458,7 +474,7 @@ def main():
             else:
                 vision_stop = bool(st.is_stopped)
 
-            # forward motion: ultrasonic if valid, else camera
+            # forward motion: ultrasonic if valid (or hold), else camera
             is_stop = us_stop if us_stop is not None else vision_stop
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
@@ -473,6 +489,9 @@ def main():
                     free=free,
                     ema=ema,
                     dominant=getattr(st, "dominant", None) if st else None,
+                    stop_source=us_source if us_stop is not None else "vision",
+                    us_cm=us_state.filtered_cm if us_state.is_valid else None,
+                    us_valid=bool(us_state.is_valid),
                 )
                 last_stop = is_stop
 

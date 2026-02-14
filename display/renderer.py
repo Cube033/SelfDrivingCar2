@@ -40,19 +40,24 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     # split line
     draw.line([(cfg.split_x, 0), (cfg.split_x, cfg.height - 1)], fill=fg)
 
-    # --- left grid
+    # --- left grid (use top 48px for grid)
     if state.grid_occ and len(state.grid_occ) >= (state.grid_w * state.grid_h):
         cell = cfg.cell_px
         max_x = cfg.left_w - 1
-        max_y = cfg.height - 1
+        grid_area_h = 48
+        max_y = grid_area_h - 1
 
-        idx = 0
-        for gy in range(state.grid_h):
+        # show bottom part of grid (closest area) to fit 48px height
+        grid_rows = min(state.grid_h, max_y // cell + 1)
+        start_row = max(0, state.grid_h - grid_rows)
+
+        for gy in range(grid_rows):
+            src_y = start_row + gy
             y = gy * cell
             for gx in range(state.grid_w):
                 x = gx * cell
+                idx = (src_y * state.grid_w) + gx
                 occ = int(state.grid_occ[idx])
-                idx += 1
                 if occ:
                     x1 = min(x + cell - 1, max_x)
                     y1 = min(y + cell - 1, max_y)
@@ -68,50 +73,45 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     arm_txt = "ARM" if state.armed else "DIS"
     stop_txt = "STOP" if state.is_stop else "GO"
 
-    # big mode (right side)
-    draw.text((cfg.split_x + 44, 2), mode, font=font, fill=fg)
-
-    # occupancy bars (L/C/R)
-    if state.occ_left is not None and state.occ_center is not None and state.occ_right is not None:
-        bar_x0 = cfg.split_x + 2
-        bar_y0 = 2
-        bar_h = 20
-        bar_w = 8
-        gap = 4
-
-        vals = [state.occ_left, state.occ_center, state.occ_right]
-        for i, v in enumerate(vals):
-            v = max(0.0, min(1.0, float(v)))
-            x0 = bar_x0 + i * (bar_w + gap)
-            x1 = x0 + bar_w
-            y1 = bar_y0 + bar_h
-            y0 = y1 - int(bar_h * v)
-            # outline
-            draw.rectangle([x0, bar_y0, x1, y1], outline=fg)
-            # fill
-            if v > 0.0:
-                draw.rectangle([x0 + 1, y0, x1 - 1, y1 - 1], fill=fg)
-        draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
-
-    # message or status
+    # right panel layout
     if state.message:
         lines = [s for s in state.message.split("\n") if s][:3]
-        y = 28
+        y = 6
         for line in lines:
-            draw.text((cfg.split_x + 2, y), line[:9], font=font, fill=fg)
+            draw.text((cfg.split_x + 2, y), line[:10], font=font, fill=fg)
             y += 10
     else:
-        draw.text((cfg.split_x + 2, 38), f"{arm_txt} {stop_txt}", font=font, fill=fg)
+        # top status line: mode + arm/stop
+        draw.text((cfg.split_x + 2, 0), f"{mode} {arm_txt[:3]} {stop_txt}", font=font, fill=fg)
 
+        # occupancy bars (L/C/R)
+        if state.occ_left is not None and state.occ_center is not None and state.occ_right is not None:
+            bar_x0 = cfg.split_x + 6
+            bar_y0 = 12
+            bar_h = 22
+            bar_w = 8
+            gap = 4
+
+            vals = [state.occ_left, state.occ_center, state.occ_right]
+            for i, v in enumerate(vals):
+                v = max(0.0, min(1.0, float(v)))
+                x0 = bar_x0 + i * (bar_w + gap)
+                x1 = x0 + bar_w
+                y1 = bar_y0 + bar_h
+                y0 = y1 - int(bar_h * v)
+                draw.rectangle([x0, bar_y0, x1, y1], outline=fg)
+                if v > 0.0:
+                    draw.rectangle([x0 + 1, y0, x1 - 1, y1 - 1], fill=fg)
+            draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
+
+        # bottom metrics line (compact)
         parts = []
-        if state.free_ratio is not None:
-            parts.append(f"F:{state.free_ratio:.2f}")
-        if state.closest_norm is not None:
-            parts.append(f"C:{state.closest_norm:.2f}")
         if state.distance_cm is not None:
-            parts.append(f"D:{state.distance_cm:.0f}cm")
-        if state.fps is not None:
-            parts.append(f"{state.fps:.1f}fps")
+            parts.append(f"D{state.distance_cm:.0f}")
+        if state.free_ratio is not None:
+            parts.append(f"F{state.free_ratio*100:.0f}")
+        if state.closest_norm is not None:
+            parts.append(f"C{state.closest_norm*100:.0f}")
         if parts:
             draw.text((cfg.split_x + 2, 50), " ".join(parts), font=font, fill=fg)
 

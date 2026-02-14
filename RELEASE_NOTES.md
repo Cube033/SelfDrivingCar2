@@ -1,5 +1,8 @@
 # Release Notes
 
+## 0.5.2 - 2026-02-14
+- Increased auto cruise speed range and step (up to 100%).
+
 ## 0.5.1 - 2026-02-14
 - Added comments and tuned ultrasonic debounce settings.
 

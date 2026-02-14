@@ -34,6 +34,11 @@ STEERING_GAIN = 1.8   # 1.5–2.5 обычно идеально
 
 # ===== Auto cruise speed scaling =====
 # Slow down when turning and/or when obstacles are close ahead.
+AUTO_CRUISE_SPEED_DEFAULT = 0.25   # default auto speed (0..1)
+AUTO_CRUISE_SPEED_MIN = 0.05       # minimum auto speed
+AUTO_CRUISE_SPEED_MAX = 1.00       # maximum auto speed
+AUTO_CRUISE_SPEED_STEP = 0.05      # step for +/- buttons
+
 AUTO_TURN_STEER_THRESHOLD = 0.35   # slow down when steering above this
 AUTO_TURN_SPEED_SCALE = 0.65       # speed scale when turning
 AUTO_TURN_STEER_VALUE = 0.60       # auto-steer magnitude
@@ -77,7 +82,7 @@ US_DISPLAY_HOLD_SEC = 1.0          # keep last distance on display (sec)
 US_CONTROL_HOLD_SEC = 0.5          # keep last valid distance for control (sec)
 
 # ===== Version =====
-APP_VERSION = "0.5.1"              # app version for logs/release notes
+APP_VERSION = "0.5.2"              # app version for logs/release notes
 
 # ===== Camera history (for turn decision) =====
 CAM_HISTORY_MAX_SEC = 3.0          # FIFO duration (sec)

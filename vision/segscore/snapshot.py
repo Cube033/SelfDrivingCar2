@@ -31,7 +31,7 @@ class SnapshotWriter:
     Optionally can be extended to store mask/image files later.
     """
 
-    def __init__(self, out_dir: str = "logs/vision", filename: Optional[str] = None):
+    def __init__(self, out_dir: str = "logs/vision", filename: Optional[str] = None, version: Optional[str] = None):
         os.makedirs(out_dir, exist_ok=True)
         self._img_dir = os.path.join(out_dir, "images")
         self._txt_dir = os.path.join(out_dir, "text")
@@ -42,6 +42,7 @@ class SnapshotWriter:
         self.path = os.path.join(out_dir, filename)
         self._f = open(self.path, "a", buffering=1)
         print(f"[SNAP] Vision snapshots: {self.path}")
+        self.version = version
 
     def close(self) -> None:
         try:
@@ -55,6 +56,8 @@ class SnapshotWriter:
             "event": event,
             "state": _safe(state),
         }
+        if self.version:
+            rec["version"] = self.version
         img_path = None
         if image is not None and Image is not None:
             frame_id = getattr(state, "frame", None) if state is not None else None

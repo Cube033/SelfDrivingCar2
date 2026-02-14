@@ -16,6 +16,7 @@ class SegScoreServiceConfig:
     snapshot_image_w: int = 320
     snapshot_image_h: int = 240
     snapshot_image_max_fps: float = 5.0
+    version: str | None = None
     snapshot_on_stop: bool = True
     snapshot_on_turn: bool = False
 
@@ -52,7 +53,7 @@ class SegScoreService:
             snapshot_max_fps=self.cfg.snapshot_image_max_fps,
         )
 
-        self.snap = SnapshotWriter(self.cfg.snapshot_dir) if self.cfg.snapshot_enabled else None
+        self.snap = SnapshotWriter(self.cfg.snapshot_dir, version=self.cfg.version) if self.cfg.snapshot_enabled else None
         self._last_stop: Optional[bool] = None
 
     def start(self) -> None:

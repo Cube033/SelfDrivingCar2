@@ -80,7 +80,7 @@ def main():
     # -----------------------
     # Logging
     # -----------------------
-    logger = EventLogger(log_dir=getattr(config, "LOG_DIR", "logs"))
+    logger = EventLogger(log_dir=getattr(config, "LOG_DIR", "logs"), version=getattr(config, "APP_VERSION", None))
     logger.write("boot", pid=pid, tty=has_tty)
 
     # -----------------------
@@ -203,6 +203,7 @@ def main():
             snapshot_image_max_fps=getattr(config, "SNAPSHOT_IMAGE_MAX_FPS", 5.0),
             snapshot_on_stop=getattr(config, "SNAPSHOT_ON_STOP_DECISION", True),
             snapshot_on_turn=getattr(config, "SNAPSHOT_ON_TURN_DECISION", False),
+            version=getattr(config, "APP_VERSION", None),
         )
     )
     vision_ok = False
@@ -330,7 +331,8 @@ def main():
             # -----------------------
             raw_cm = us_reader.read_cm() if us_reader else None
             us_state = us_filter.update(raw_cm, ts=now)
-            us_stop = True if us_reader is None else (not us_state.is_valid or us_state.is_stop)
+            # If ultrasonic invalid, fall back to vision for forward stop
+            us_stop = None if us_reader is None else (us_state.is_stop if us_state.is_valid else None)
 
             # -----------------------
             # Gamepad hot-plug
@@ -451,8 +453,8 @@ def main():
             else:
                 vision_stop = bool(st.is_stopped)
 
-            # forward motion is governed by ultrasonic (AUTO only)
-            is_stop = us_stop if us_reader is not None else vision_stop
+            # forward motion: ultrasonic if valid, else camera
+            is_stop = us_stop if us_stop is not None else vision_stop
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
 
@@ -552,7 +554,7 @@ def main():
             # Forward motion gated by ultrasonic (AUTO only)
             # -----------------------
             if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0:
-                if us_stop:
+                if is_stop:
                     final_throttle = 0.0
 
             # -----------------------

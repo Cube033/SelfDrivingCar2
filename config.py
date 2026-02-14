@@ -74,6 +74,9 @@ US_MIN_CM = 2.0
 US_MAX_CM = 400.0
 US_STALE_SEC = 0.5
 
+# ===== Version =====
+APP_VERSION = "0.5.0"
+
 # ===== Camera history (for turn decision) =====
 CAM_HISTORY_MAX_SEC = 3.0
 CAM_HISTORY_TAU_SEC = 1.0

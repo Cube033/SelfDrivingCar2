@@ -1,5 +1,8 @@
 # Release Notes
 
+## 0.5.1 - 2026-02-14
+- Added comments and tuned ultrasonic debounce settings.
+
 ## 0.5.0 - 2026-02-14
 - Added Arduino HC-SR04 serial integration for forward stop decisions.
 - Added camera FIFO history with weighted turn decisioning.

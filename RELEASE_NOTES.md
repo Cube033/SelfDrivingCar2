@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.5.3 - 2026-02-14
+- Improved Arduino serial parsing/initialization for ultrasonic stability.
+- Added configurable ultrasonic serial timeout.
+- Trimmed OLED vertical separator to avoid crossing bottom metrics.
+
 ## 0.5.2 - 2026-02-14
 - Increased auto cruise speed range and step (up to 100%).
 

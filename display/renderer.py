@@ -37,8 +37,8 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     draw = ImageDraw.Draw(img)
     font = _font()
 
-    # split line
-    draw.line([(cfg.split_x, 0), (cfg.split_x, cfg.height - 1)], fill=fg)
+    # split line only for top content area; keep metrics row clean.
+    draw.line([(cfg.split_x, 0), (cfg.split_x, 47)], fill=fg)
 
     # --- left grid (use top 48px for grid)
     if state.grid_occ and len(state.grid_occ) >= (state.grid_w * state.grid_h):

@@ -258,6 +258,7 @@ def main():
             us_reader = UltrasonicSerialReader(
                 port=getattr(config, "US_SERIAL_PORT", "/dev/ttyACM0"),
                 baud=getattr(config, "US_BAUD", 115200),
+                timeout=getattr(config, "US_SERIAL_TIMEOUT", 0.1),
             )
             logger.write("ultrasonic_ok")
             print("[SYSTEM] Ultrasonic serial connected")

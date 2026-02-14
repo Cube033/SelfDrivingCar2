@@ -73,7 +73,7 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
     arm_txt = "ARM" if state.armed else "DIS"
     stop_txt = "STOP" if state.is_stop else "GO"
 
-    # right panel layout
+    # right panel layout (top 48px)
     if state.message:
         lines = [s for s in state.message.split("\n") if s][:3]
         y = 6
@@ -104,15 +104,21 @@ def render(state: DisplayState, cfg: RenderConfig = RenderConfig()) -> Image.Ima
                     draw.rectangle([x0 + 1, y0, x1 - 1, y1 - 1], fill=fg)
             draw.text((bar_x0, bar_y0 + bar_h + 2), "L C R", font=font, fill=fg)
 
-        # bottom metrics line (compact)
-        parts = []
-        if state.distance_cm is not None:
-            parts.append(f"D{state.distance_cm:.0f}")
-        if state.free_ratio is not None:
-            parts.append(f"F{state.free_ratio*100:.0f}")
-        if state.closest_norm is not None:
-            parts.append(f"C{state.closest_norm*100:.0f}")
-        if parts:
-            draw.text((cfg.split_x + 2, 50), " ".join(parts), font=font, fill=fg)
+    # bottom metrics row (full width, fixed positions)
+    # Use placeholders to keep layout stable.
+    d_txt = "--"
+    if state.distance_cm is not None:
+        d_txt = f"{state.distance_cm:3.0f}"
+    f_txt = "--"
+    if state.free_ratio is not None:
+        f_txt = f"{state.free_ratio*100:3.0f}"
+    c_txt = "--"
+    if state.closest_norm is not None:
+        c_txt = f"{state.closest_norm*100:3.0f}"
+
+    y_metrics = 52
+    draw.text((2, y_metrics), f"D:{d_txt}", font=font, fill=fg)
+    draw.text((44, y_metrics), f"F:{f_txt}", font=font, fill=fg)
+    draw.text((86, y_metrics), f"C:{c_txt}", font=font, fill=fg)
 
     return img

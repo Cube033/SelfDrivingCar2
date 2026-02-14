@@ -341,7 +341,9 @@ def main():
                 last_us_display_ts = now
                 last_us_control_cm = us_state.filtered_cm
                 last_us_control_ts = now
-            # If ultrasonic invalid, fall back to vision for forward stop
+            # Stop source policy:
+            # - if ultrasonic device exists: use ultrasonic only (or fail-safe stop on invalid data)
+            # - if ultrasonic device is absent: fall back to vision
             us_control_hold = float(getattr(config, "US_CONTROL_HOLD_SEC", 0.5))
             if us_reader is None:
                 us_stop = None
@@ -353,8 +355,8 @@ def main():
                 us_stop = us_filter.update(last_us_control_cm, ts=now).is_stop
                 us_source = "ultra_hold"
             else:
-                us_stop = None
-                us_source = "vision"
+                us_stop = True
+                us_source = "ultra_invalid"
 
             # -----------------------
             # Gamepad hot-plug
@@ -475,7 +477,9 @@ def main():
             else:
                 vision_stop = bool(st.is_stopped)
 
-            # forward motion: ultrasonic if valid (or hold), else camera
+            # forward motion:
+            # - ultrasonic path when device exists
+            # - camera only when ultrasonic device is absent
             is_stop = us_stop if us_stop is not None else vision_stop
             free = float(st.free_ratio) if st is not None else None
             ema = float(st.ema_free) if st is not None else None
@@ -590,9 +594,10 @@ def main():
                     final_throttle = 0.0
 
             # -----------------------
-            # Auto speed scaling (turning / obstacles)
+            # Auto speed scaling
+            # Camera does not affect speed while ultrasonic is present.
             # -----------------------
-            if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0 and st is not None:
+            if ap.mode == DriveMode.AUTO_CRUISE and final_throttle > 0.0:
                 scale = 1.0
 
                 turn_thresh = getattr(config, "AUTO_TURN_STEER_THRESHOLD", 0.35)
@@ -600,14 +605,16 @@ def main():
                 if abs(steer) >= float(turn_thresh):
                     scale *= float(turn_scale)
 
-                occ_center = float(getattr(st, "occ_center", 0.0))
-                closest_norm = float(getattr(st, "closest_norm", 0.0))
-                occ_thresh = getattr(config, "AUTO_OBS_CENTER_THRESHOLD", 0.35)
-                close_thresh = getattr(config, "AUTO_CLOSEST_THRESHOLD", 0.75)
-                obs_scale = getattr(config, "AUTO_OBS_SPEED_SCALE", 0.50)
+                if us_reader is None and st is not None:
+                    # Camera-based speed reduction is enabled only without ultrasonic device.
+                    occ_center = float(getattr(st, "occ_center", 0.0))
+                    closest_norm = float(getattr(st, "closest_norm", 0.0))
+                    occ_thresh = getattr(config, "AUTO_OBS_CENTER_THRESHOLD", 0.35)
+                    close_thresh = getattr(config, "AUTO_CLOSEST_THRESHOLD", 0.75)
+                    obs_scale = getattr(config, "AUTO_OBS_SPEED_SCALE", 0.50)
 
-                if occ_center >= float(occ_thresh) or closest_norm >= float(close_thresh):
-                    scale *= float(obs_scale)
+                    if occ_center >= float(occ_thresh) or closest_norm >= float(close_thresh):
+                        scale *= float(obs_scale)
 
                 final_throttle *= max(0.0, min(1.0, scale))
 

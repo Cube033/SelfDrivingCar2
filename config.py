@@ -83,7 +83,7 @@ US_DISPLAY_HOLD_SEC = 1.0          # keep last distance on display (sec)
 US_CONTROL_HOLD_SEC = 0.5          # keep last valid distance for control (sec)
 
 # ===== Version =====
-APP_VERSION = "0.5.3"              # app version for logs/release notes
+APP_VERSION = "0.5.4"              # app version for logs/release notes
 
 # ===== Camera history (for turn decision) =====
 CAM_HISTORY_MAX_SEC = 3.0          # FIFO duration (sec)

@@ -1,5 +1,10 @@
 # Release Notes
 
+## 0.5.4 - 2026-02-14
+- Camera no longer affects speed while ultrasonic is present.
+- Camera is used only for turning and as fallback when ultrasonic device is absent.
+- Added fail-safe stop state when ultrasonic device is present but data is invalid.
+
 ## 0.5.3 - 2026-02-14
 - Improved Arduino serial parsing/initialization for ultrasonic stability.
 - Added configurable ultrasonic serial timeout.

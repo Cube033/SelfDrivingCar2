@@ -248,12 +248,24 @@ def main():
     us_filter = UltrasonicFilter(
         stop_cm=getattr(config, "US_STOP_CM", 35.0),
         go_cm=getattr(config, "US_GO_CM", 45.0),
+        stop_confirm_frames=getattr(config, "US_STOP_CONFIRM_FRAMES", 2),
+        go_confirm_frames=getattr(config, "US_GO_CONFIRM_FRAMES", 4),
         ema_alpha=getattr(config, "US_EMA_ALPHA", 0.3),
         min_cm=getattr(config, "US_MIN_CM", 2.0),
         max_cm=getattr(config, "US_MAX_CM", 400.0),
         stale_sec=getattr(config, "US_STALE_SEC", 0.5),
     )
-    if getattr(config, "US_ENABLED", True):
+    us_enabled = bool(getattr(config, "US_ENABLED", True))
+    us_retry_interval = float(getattr(config, "US_RETRY_INTERVAL", 2.0))
+    last_us_retry = 0.0
+
+    def try_connect_ultrasonic(now_ts: float) -> None:
+        nonlocal us_reader, last_us_retry
+        if not us_enabled or us_reader is not None:
+            return
+        if now_ts - last_us_retry < us_retry_interval:
+            return
+        last_us_retry = now_ts
         try:
             us_reader = UltrasonicSerialReader(
                 port=getattr(config, "US_SERIAL_PORT", "/dev/ttyACM0"),
@@ -265,6 +277,8 @@ def main():
         except Exception as e:
             logger.write("ultrasonic_fail", err=str(e))
             print("[WARN] Ultrasonic serial failed:", e)
+
+    try_connect_ultrasonic(time.time())
 
     # -----------------------
     # Camera history (FIFO) for turn decision
@@ -331,10 +345,21 @@ def main():
             turn_occ_center = None
             turn_occ_right = None
 
+            # hot-reconnect ultrasonic serial if missing
+            try_connect_ultrasonic(now)
+
             # -----------------------
             # Ultrasonic read (Arduino)
             # -----------------------
             raw_cm = us_reader.read_cm() if us_reader else None
+            if us_reader is not None and getattr(us_reader, "broken", False):
+                logger.write("ultrasonic_fail", err="serial_io_error")
+                try:
+                    us_reader.close()
+                except Exception:
+                    pass
+                us_reader = None
+                raw_cm = None
             us_state = us_filter.update(raw_cm, ts=now)
             if us_state.is_valid and us_state.filtered_cm is not None:
                 last_us_display_cm = us_state.filtered_cm
@@ -604,6 +629,17 @@ def main():
                 turn_scale = getattr(config, "AUTO_TURN_SPEED_SCALE", 0.65)
                 if abs(steer) >= float(turn_thresh):
                     scale *= float(turn_scale)
+
+                if us_reader is not None and us_state.is_valid and us_state.filtered_cm is not None:
+                    # Progressive slowdown in near-obstacle zone.
+                    stop_cm = float(getattr(config, "US_STOP_CM", 40.0))
+                    slow_cm = float(getattr(config, "US_SLOW_CM", 70.0))
+                    slow_min = float(getattr(config, "US_SLOW_MIN_SCALE", 0.30))
+                    d = float(us_state.filtered_cm)
+                    if slow_cm > stop_cm and d < slow_cm:
+                        t = clamp((d - stop_cm) / (slow_cm - stop_cm), 0.0, 1.0)
+                        near_scale = slow_min + ((1.0 - slow_min) * t)
+                        scale *= clamp(near_scale, slow_min, 1.0)
 
                 if us_reader is None and st is not None:
                     # Camera-based speed reduction is enabled only without ultrasonic device.

@@ -1,5 +1,11 @@
 # Release Notes
 
+## 0.5.5 - 2026-02-15
+- Added ultrasonic serial auto-reconnect loop after startup failures/disconnects.
+- Added ultrasonic STOP/GO frame debouncing.
+- Added progressive speed reduction in 70..40 cm range before hard STOP.
+- Reduced control hold window for stale ultrasonic data.
+
 ## 0.5.4 - 2026-02-14
 - Camera no longer affects speed while ultrasonic is present.
 - Camera is used only for turning and as fallback when ultrasonic device is absent.

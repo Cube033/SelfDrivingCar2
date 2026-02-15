@@ -75,15 +75,20 @@ US_BAUD = 115200                   # serial baud rate
 US_SERIAL_TIMEOUT = 0.1            # serial read timeout (sec)
 US_STOP_CM = 40.0                  # stop if <= this (cm)
 US_GO_CM = 55.0                    # resume if >= this (cm)
+US_STOP_CONFIRM_FRAMES = 2         # frames needed to enter STOP
+US_GO_CONFIRM_FRAMES = 5           # frames needed to leave STOP
+US_SLOW_CM = 70.0                  # start slowing down below this distance
+US_SLOW_MIN_SCALE = 0.30           # speed scale near stop threshold
 US_EMA_ALPHA = 0.15                # smoothing factor (lower = smoother)
 US_MIN_CM = 2.0                    # ignore closer than this
 US_MAX_CM = 400.0                  # ignore farther than this
 US_STALE_SEC = 1.2                 # data staleness timeout (sec)
 US_DISPLAY_HOLD_SEC = 1.0          # keep last distance on display (sec)
-US_CONTROL_HOLD_SEC = 0.5          # keep last valid distance for control (sec)
+US_CONTROL_HOLD_SEC = 0.2          # keep last valid distance for control (sec)
+US_RETRY_INTERVAL = 2.0            # retry serial reconnect interval (sec)
 
 # ===== Version =====
-APP_VERSION = "0.5.4"              # app version for logs/release notes
+APP_VERSION = "0.5.5"              # app version for logs/release notes
 
 # ===== Camera history (for turn decision) =====
 CAM_HISTORY_MAX_SEC = 3.0          # FIFO duration (sec)

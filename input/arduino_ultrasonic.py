@@ -20,6 +20,7 @@ class UltrasonicSerialReader:
         self._ser = serial.Serial(self.port, self.baud, timeout=self.timeout)
         self._last_cm: Optional[float] = None
         self._last_ts: float = 0.0
+        self._broken: bool = False
         # UNO resets on serial open; wait a moment and drop boot garbage.
         time.sleep(1.2)
         try:
@@ -37,6 +38,7 @@ class UltrasonicSerialReader:
         try:
             line = self._ser.readline().decode("ascii", errors="ignore").strip()
         except Exception:
+            self._broken = True
             return None
 
         if not line:
@@ -75,3 +77,7 @@ class UltrasonicSerialReader:
 
     def last_ts(self) -> float:
         return self._last_ts
+
+    @property
+    def broken(self) -> bool:
+        return self._broken
